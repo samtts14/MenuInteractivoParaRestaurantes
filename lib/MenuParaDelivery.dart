@@ -4,27 +4,6 @@ import 'dart:convert';
 import 'package:diacritic/diacritic.dart';
 import 'dart:async';
 
-void main() {
-  runApp(const CafeteriaApp());
-}
-
-class CafeteriaApp extends StatelessWidget {
-  const CafeteriaApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Menú Migajas Café',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.brown,
-        scaffoldBackgroundColor: const Color(0xFFF9F8F6),
-      ),
-      home: const MenuPage(),
-    );
-  }
-}
-
 String normalizar(String texto) => removeDiacritics(texto.toLowerCase());
 
 class Producto {
@@ -32,8 +11,11 @@ class Producto {
   final String nombre;
   final String descripcion;
   final double precio;
+  final double? precioOferta; 
   final String imagen;
   final String categoria;
+  final String estado;
+  final bool enOferta; 
 
   Producto({
     required this.id,
@@ -42,23 +24,40 @@ class Producto {
     required this.precio,
     required this.imagen,
     required this.categoria,
+    required this.estado,
+    required this.enOferta,
+    this.precioOferta,
   });
 
   factory Producto.fromJson(Map<String, dynamic> json) {
-    // Manejar varias variantes de nombres de columna que puedas tener
+    // Manejar ID
     final id = (json['ID'] ?? json['Id'] ?? json['id'] ?? '').toString();
+    // Nombre
     final nombre = (json['Nombre del Producto'] ??
             json['Nombre'] ??
             json['Producto'] ??
             '')
         .toString();
-    final descripcion =
-        (json['Descripción'] ?? json['Descripcion'] ?? json[' descripción'] ?? '')
-            .toString();
+    // Descripción
+    final descripcion = (json['Descripción'] ??
+            json['Descripcion'] ??
+            json[' descripción'] ??
+            '')
+        .toString();
+    // Precio
     final precio =
         double.tryParse((json['Precio'] ?? json['price'] ?? '0').toString()) ??
             0.0;
-    // AppSheet puede devolver columna 'Imagen Producto' o 'Imagen URL' o 'Imagen'
+    // Precio de oferta (columna EXACTA: "Precio de Oferta")
+    final ofertaRaw = (json['Precio de Oferta'] ??
+            json['Precio_de_Oferta'] ??
+            json['precio_oferta'] ??
+            json['precioOferta'] ??
+            null);
+    final double? precioOferta = ofertaRaw != null && ofertaRaw.toString().trim().isNotEmpty
+        ? double.tryParse(ofertaRaw.toString())
+        : null;
+    // Imagen
     final rawImage = (json['Imagen Producto'] ??
             json['Imagen URL'] ??
             json['Imagen'] ??
@@ -66,9 +65,24 @@ class Producto {
             '')
         .toString();
     final imagen = _convertirImagenAppSheet(rawImage);
+    // Categoría
     final categoria =
         (json['Categoría'] ?? json['Categoria'] ?? json['category'] ?? '')
             .toString();
+    // ESTADO (Disponible / Agotado)
+    final estado =
+        (json['Estado'] ?? json['estado'] ?? json['Estatus'] ?? '')
+            .toString()
+            .trim();
+    // EN OFERTA - AppSheet devuelve "TRUE" / "FALSE" (texto)
+    final rawEnOferta = (json['En Oferta'] ??
+            json['EnOferta'] ??
+            json['en_oferta'] ??
+            json['enOferta'] ??
+            'FALSE')
+        .toString()
+        .trim();
+    final enOferta = rawEnOferta.toLowerCase() == 'true';
 
     return Producto(
       id: id,
@@ -77,20 +91,25 @@ class Producto {
       precio: precio,
       imagen: imagen,
       categoria: categoria,
+      estado: estado,
+      enOferta: enOferta,
+      precioOferta: precioOferta,
     );
   }
 
   static String _convertirImagenAppSheet(String imagen) {
     final trimmed = imagen.trim();
     if (trimmed.isEmpty) return '';
-    // Si ya es URL o data: devolver tal cual
+
+    // Si ya es URL o data:
     if (trimmed.startsWith('http') || trimmed.startsWith('data:')) {
       return trimmed;
     }
-    // Si no es URL, asumo nombre de archivo en AppSheet y construyo URL
-    // Cambia el appName y tableName si tu app tiene otro ID/tabla
+
+    // URL AppSheet (tu appId y tableName)
     const appId = '15e7eaec-dd89-454a-9e00-13d3ee5094ed';
     const tableName = 'Productos';
+
     return 'https://www.appsheet.com/template/gettablefileurl?appName=$appId&tableName=$tableName&fileName=$trimmed';
   }
 
@@ -102,14 +121,14 @@ class Producto {
   int get hashCode => id.hashCode;
 }
 
-class MenuPage extends StatefulWidget {
-  const MenuPage({super.key});
+class MenuDelivery extends StatefulWidget {
+  const MenuDelivery({super.key});
 
   @override
-  State<MenuPage> createState() => _MenuPageState();
+  State<MenuDelivery> createState() => _MenuDeliveryState();
 }
 
-class _MenuPageState extends State<MenuPage> {
+class _MenuDeliveryState extends State<MenuDelivery> {
   List<Producto> productos = [];
   List<Producto> productosFiltrados = [];
   bool cargando = true;
@@ -171,19 +190,25 @@ class _MenuPageState extends State<MenuPage> {
     setState(() {
       cargando = true;
     });
+
     try {
       final response = await http.get(Uri.parse(endpoint));
+
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
+
         final List<Producto> parsed = data
             .map((e) => Producto.fromJson((e as Map<String, dynamic>)))
-            // FILTRO: excluir filas vacías (nombre o categoría vacíos)
+            // FILTRO: excluir filas vacías Y productos agotados
             .where((p) =>
-                p.nombre.trim().isNotEmpty && p.categoria.trim().isNotEmpty)
+                p.nombre.trim().isNotEmpty &&
+                p.categoria.trim().isNotEmpty &&
+                p.estado.toLowerCase() == 'disponible')
             .toList();
 
         setState(() {
           productos = parsed;
+
           // aplicar el filtro de búsqueda actual si existe
           if (filtroBusqueda.trim().isNotEmpty) {
             final q = normalizar(filtroBusqueda);
@@ -195,6 +220,14 @@ class _MenuPageState extends State<MenuPage> {
           } else {
             productosFiltrados = List.from(productos);
           }
+
+          // Ordenar productosFiltrados para que las ofertas salgan primero en el carrusel/listados
+          productosFiltrados.sort((a, b) {
+            if (a.enOferta && !b.enOferta) return -1;
+            if (!a.enOferta && b.enOferta) return 1;
+            return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
+          });
+
           cargando = false;
         });
 
@@ -245,6 +278,13 @@ class _MenuPageState extends State<MenuPage> {
         final categoria = normalizar(producto.categoria);
         return nombre.contains(filtro) || categoria.contains(filtro);
       }).toList();
+
+      // Mantener orden: ofertas primero
+      productosFiltrados.sort((a, b) {
+        if (a.enOferta && !b.enOferta) return -1;
+        if (!a.enOferta && b.enOferta) return 1;
+        return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
+      });
     });
 
     // después de filtrar, garantizar página válida (ej. si lista se vacía)
@@ -274,41 +314,59 @@ class _MenuPageState extends State<MenuPage> {
     });
   }
 
+  // ---------- IMPORTANT: no eliminamos producto del menú cuando se quita del carrito ----------
   void eliminarDelCarrito(Producto producto) {
     setState(() {
       if (carrito[producto] != null && carrito[producto]! > 1) {
         carrito[producto] = carrito[producto]! - 1;
       } else {
+        // Solo quitar del carrito, NO eliminar del menú ni de productosFiltrados
         carrito.remove(producto);
-        // Si quieres que al eliminar del carrito también desaparezca del menú:
-        eliminarProductoDelMenu(producto);
       }
     });
   }
+  // --------------------------------------------------------------------------------------------
+
+  double getPrice(Producto p) {
+    if (p.enOferta && p.precioOferta != null && p.precioOferta! > 0) {
+      return p.precioOferta!;
+    }
+    return p.precio;
+  }
 
   double get totalCarrito => carrito.entries
-      .fold(0.0, (s, e) => s + (e.key.precio * e.value));
+      .fold(0.0, (s, e) => s + (getPrice(e.key) * e.value));
 
   @override
   Widget build(BuildContext context) {
-    final categorias = productosFiltrados
+    // Generar lista de categorías y colocar "Ofertas" al principio si hay ofertas
+    final List<Producto> productosEnOferta =
+        productosFiltrados.where((p) => p.enOferta && p.precioOferta != null && p.precioOferta! > 0).toList();
+
+    final categorias = <String>[];
+    if (productosEnOferta.isNotEmpty) {
+      categorias.add('Ofertas');
+    }
+    categorias.addAll(productosFiltrados
         .map((p) => p.categoria)
         .toSet()
         .where((categoria) =>
             productosFiltrados.any((p) => p.categoria == categoria))
-        .toList();
+        .toList());
 
     return Scaffold(
+      backgroundColor: const Color.fromARGB(255, 251, 249, 245),
       appBar: AppBar(
-        title: const Text('Menú Migajas Café'),
+        //cambier nombre de titulo
+        title: const Text('Menú'),
         actions: [
-          IconButton(
+          /*IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () async {
               await fetchProductos();
             },
             tooltip: 'Refrescar desde AppSheet',
-          ),
+          ),*/
           Stack(
             children: [
               IconButton(
@@ -379,18 +437,54 @@ class _MenuPageState extends State<MenuPage> {
                                       AspectRatio(
                                         aspectRatio: 18 / 9,
                                         child: producto.imagen.isNotEmpty
-                                            ? Image.network(
-                                                producto.imagen,
-                                                fit: BoxFit.cover,
-                                                width: double.infinity,
-                                                errorBuilder:
-                                                    (context, error, stack) =>
-                                                        Container(
-                                                  color: Colors.grey[300],
-                                                  child: const Icon(
-                                                      Icons.broken_image,
-                                                      size: 50),
-                                                ),
+                                            ? Stack(
+                                                children: [
+                                                  Positioned.fill(
+                                                    child: Image.network(
+                                                      producto.imagen,
+                                                      fit: BoxFit.cover,
+                                                      width: double.infinity,
+                                                      errorBuilder:
+                                                          (context, error, stack) =>
+                                                              Container(
+                                                        color: Colors.grey[300],
+                                                        child: const Icon(
+                                                            Icons.broken_image,
+                                                            size: 50),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  // etiqueta inclinada en la esquina superior izquierda si está en oferta
+                                                  if (producto.enOferta && producto.precioOferta != null && producto.precioOferta! > 0)
+                                                    Positioned(
+                                                      top: 8,
+                                                      left: -30,
+                                                      child: Transform.rotate(
+                                                        angle: -0.6, // inclinación
+                                                        child: Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.redAccent,
+                                                            borderRadius: BorderRadius.circular(6),
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: Colors.black.withOpacity(0.2),
+                                                                offset: const Offset(0,2),
+                                                                blurRadius: 4,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          child: const Text(
+                                                            '🔥 OFERTA',
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontWeight: FontWeight.bold,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                ],
                                               )
                                             : Container(
                                                 color: Colors.grey[300],
@@ -465,25 +559,43 @@ class _MenuPageState extends State<MenuPage> {
                     child: SizedBox(
                       width: 500,
                       child: TextField(
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Buscar producto o categoría',
-                          prefixIcon: Icon(Icons.search),
-                          border: OutlineInputBorder(),
+                          prefixIcon: const Icon(Icons.search),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+
+                          // Bordes redondeados y desactivación del borde duro
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(25),
+                            borderSide: BorderSide.none,
+                          ),
+
+                          // Sombra suave estilo tarjeta
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(25),
+                            borderSide: BorderSide.none,
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(25),
+                            borderSide: BorderSide(color: Colors.grey.shade300, width: 1),
+                          ),
                         ),
+
                         onChanged: filtrarProductos,
                       ),
                     ),
                   ),
-
                   // Lista de categorías con pull-to-refresh
                   Expanded(
                     child: RefreshIndicator(
                       onRefresh: fetchProductos,
                       child: ListView(
                         children: categorias.map((categoria) {
-                          final items = productosFiltrados
-                              .where((p) => p.categoria == categoria)
-                              .toList();
+                          final items = categoria == 'Ofertas'
+                              ? productosFiltrados.where((p) => p.enOferta && p.precioOferta != null && p.precioOferta! > 0).toList()
+                              : productosFiltrados.where((p) => p.categoria == categoria).toList();
 
                           if (items.isEmpty) return const SizedBox.shrink();
 
@@ -520,26 +632,80 @@ class _MenuPageState extends State<MenuPage> {
                                       margin: const EdgeInsets.symmetric(
                                           horizontal: 10, vertical: 9),
                                       child: ListTile(
-                                        leading: ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(8),
-                                          child: producto.imagen.isNotEmpty
-                                              ? Image.network(
-                                                  producto.imagen,
-                                                  width: 80,
-                                                  height: 95,
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (context, error,
-                                                          stackTrace) =>
-                                                      const Icon(
-                                                          Icons.broken_image),
-                                                )
-                                              : const Icon(Icons.image_not_supported,
-                                                  size: 48),
+                                        leading: Stack(
+                                          children: [
+                                            ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              child: producto.imagen.isNotEmpty
+                                                  ? Image.network(
+                                                      producto.imagen,
+                                                      width: 80,
+                                                      height: 95,
+                                                      fit: BoxFit.cover,
+                                                      errorBuilder: (context, error,
+                                                              stackTrace) =>
+                                                          const Icon(Icons.broken_image),
+                                                    )
+                                                  : const Icon(Icons.image_not_supported,
+                                                      size: 48),
+                                            ),
+                                            // etiqueta inclinada si está en oferta y tiene precio de oferta válido
+                                            if (producto.enOferta && producto.precioOferta != null && producto.precioOferta! > 0)
+                                              Positioned(
+                                                top: 4,
+                                                left: -26,
+                                                child: Transform.rotate(
+                                                  angle: -0.6,
+                                                  child: Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.redAccent,
+                                                      borderRadius: BorderRadius.circular(6),
+                                                    ),
+                                                    child: const Text(
+                                                      '🔥 OFERTA',
+                                                      style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 10,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
                                         ),
                                         title: Text(producto.nombre),
-                                        subtitle: Text(
-                                            '${producto.descripcion}\nRD\$${producto.precio.toStringAsFixed(2)}'),
+                                        subtitle: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(producto.descripcion),
+                                            const SizedBox(height: 6),
+                                            producto.enOferta && producto.precioOferta != null && producto.precioOferta! > 0
+                                                ? Row(
+                                                    children: [
+                                                      Text(
+                                                        'RD\$${producto.precio.toStringAsFixed(2)}',
+                                                        style: const TextStyle(
+                                                          decoration: TextDecoration.lineThrough,
+                                                          color: Colors.black54,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Text(
+                                                        'RD\$${(producto.precioOferta ?? producto.precio).toStringAsFixed(2)}',
+                                                        style: const TextStyle(
+                                                          color: Colors.red,
+                                                          fontSize: 16,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  )
+                                                : Text('RD\$${producto.precio.toStringAsFixed(2)}'),
+                                          ],
+                                        ),
                                         isThreeLine: true,
                                         trailing: IconButton(
                                           icon: const Icon(
@@ -580,9 +746,8 @@ class _MenuPageState extends State<MenuPage> {
                 if (carrito[producto] != null && carrito[producto]! > 1) {
                   carrito[producto] = carrito[producto]! - 1;
                 } else {
+                  // Sólo quitar del carrito, NO eliminar del menú
                   carrito.remove(producto);
-                  // Al eliminar totalmente del carrito, también lo elimino del menú/carrusel
-                  eliminarProductoDelMenu(producto);
                   if (carrito.isEmpty) {
                     Navigator.of(contextModal).pop();
                   }
@@ -613,6 +778,7 @@ class _MenuPageState extends State<MenuPage> {
                             itemBuilder: (context, index) {
                               final producto = carrito.keys.elementAt(index);
                               final cantidad = carrito[producto]!;
+                              final unidad = getPrice(producto);
                               return Card(
                                 color: const Color(0xFFFFFFFF),
                                 shape: RoundedRectangleBorder(
@@ -654,8 +820,7 @@ class _MenuPageState extends State<MenuPage> {
                                               ),
                                             ),
                                             Text('Cantidad: $cantidad'),
-                                            Text(
-                                                'Unidad: RD\$${producto.precio.toStringAsFixed(2)}'),
+                                            Text('Unidad: RD\$${unidad.toStringAsFixed(2)}'),
                                             Container(
                                               margin:
                                                   const EdgeInsets.only(top: 4),
@@ -666,7 +831,7 @@ class _MenuPageState extends State<MenuPage> {
                                                 borderRadius: BorderRadius.circular(6),
                                               ),
                                               child: Text(
-                                                'Subtotal: RD\$${(producto.precio * cantidad).toStringAsFixed(2)}',
+                                                'Subtotal: RD\$${(unidad * cantidad).toStringAsFixed(2)}',
                                                 style: const TextStyle(
                                                   fontWeight: FontWeight.bold,
                                                   color: Color(0xFF6B4C3B),
