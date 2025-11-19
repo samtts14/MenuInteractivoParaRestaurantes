@@ -18,7 +18,7 @@ class CafeteriaApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.brown,
-        scaffoldBackgroundColor: Colors.brown[50],
+        scaffoldBackgroundColor: const Color(0xFFF9F8F6),
       ),
       home: const MenuPage(),
     );
