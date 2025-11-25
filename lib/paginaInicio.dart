@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+// dart:typed_data ya no es necesario ni la importación de base64
+
 // Importamos la página unificada para la navegación del menú (que usa la tabla Productos)
 import 'menu_page.dart';
 
@@ -13,15 +15,24 @@ class MenuHomeScreen extends StatefulWidget {
   State<MenuHomeScreen> createState() => _MenuHomeScreenState();
 }
 
-class _MenuHomeScreenState extends State<MenuHomeScreen> {
+// Añadimos 'with SingleTickerProviderStateMixin' para usar animaciones
+class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProviderStateMixin {
   // ---------------- COLORES DE LA MARCA ----------------
   final Color primaryColor = const Color(0xFF8C5A3A);
   final Color secondaryColor = const Color(0xFFF2E8DC);
   final Color accentColor = const Color(0xFF3E2723);
 
+  // ---------------- ESTADO DE CARGA Y ANIMACIÓN ----------------
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _fadeAnimation; // NUEVO: Animación de desvanecimiento (opacidad)
+  late Animation<Offset> _slideAnimation; // NUEVO: Animación de desplazamiento
+  bool _isLoading = true; // Nuevo estado de carga para controlar el splash screen
+  
+
   // ---------------- DATOS DEL NEGOCIO (Estado) ----------------
   // Valores por defecto (se actualizarán con DatosNeg)
-  String nombreNegocio = "Migajas Café"; 
+  String nombreNegocio = "SARLUX App"; 
   String urlInstagram = "https://www.instagram.com/migajascafe/";
   String urlMapa = "https://maps.app.goo.gl/g2rA9JGpfewZb35T9";
   String telefonoWhatsapp = "18095550000"; 
@@ -30,18 +41,64 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
   Map<String, String> horariosSemana = {};
 
   // URL del Script apuntando a la pestaña 'DatosNeg' en el MISMO sheet.
-  // IMPORTANTE: Si hiciste una "Nueva Implementación" y la URL cambió, actualízala aquí.
   final String endpointInfo =
       'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=DatosNeg';
 
   @override
   void initState() {
     super.initState();
+    
+    // 1. Inicializar el controlador de animación. Usaremos un solo controlador para todos los efectos.
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500), // Un poco más lenta para el fade/slide
+    );
+
+    // 2. Definir la animación de opacidad (Fade): de 0.0 a 1.0
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeIn,
+      ),
+    );
+
+    // 3. Definir la animación de desplazamiento (Slide): de (-0.2 en Y) a (0.0 en Y)
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, -0.2), // Inicia un poco arriba
+      end: Offset.zero, // Termina en el centro
+    ).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeInOutSine,
+      ),
+    );
+
+    // 4. Definir la animación de escala (Pulso sutil): de 0.95 a 1.0
+    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeOut,
+      ),
+    );
+
+    // 5. Iniciar la animación al cargar la pantalla.
+    _animationController.forward();
+
     _cargarDatosNegocio();
   }
+  
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
 
   // Función para cargar los datos desde Google Sheets (Pestaña DatosNeg)
   Future<void> _cargarDatosNegocio() async {
+    // Retraso para que la animación se muestre al menos 500ms
+    await Future.delayed(const Duration(milliseconds: 500));
+    
     try {
       debugPrint("Iniciando carga de pestaña DatosNeg...");
       // Agregamos un timestamp para evitar que el celular guarde una versión vieja en caché
@@ -54,7 +111,6 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
         // Verificamos si devolvió un error (Map) o una lista de datos
         if (decodedData is Map && decodedData.containsKey('error')) {
           debugPrint("Error desde AppScript: ${decodedData['error']}");
-          return;
         }
 
         if (decodedData is List && decodedData.isNotEmpty) {
@@ -66,8 +122,6 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
             debugPrint("🚨 ERROR CRÍTICO DE SCRIPT 🚨");
             debugPrint("El script de Google sigue devolviendo la hoja 'Productos'.");
             debugPrint("SOLUCIÓN: Ve a Apps Script -> Implementar -> Nueva implementación para actualizar el código en la nube.");
-            // No salimos con return aquí, ya que el nombre del negocio y demás info
-            // podrían estar presentes incluso en un JSON de 'Productos' si se repiten las claves.
           }
           // -----------------------------------
 
@@ -141,16 +195,20 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
               updateDia("miércoles", "Miércoles"); 
               updateDia("jueves", "Jueves");
               updateDia("viernes", "Viernes");
-              updateDia("sábado", "Sábado");       
+              updateDia("sábado", "Sábado"); 
               updateDia("domingo", "Domingo");
+              
+              _isLoading = false; // Datos cargados, ocultamos la carga
             });
           }
         } else {
           debugPrint("La pestaña DatosNeg está vacía o el script devolvió una lista vacía.");
+          if (mounted) setState(() => _isLoading = false);
         }
       }
     } catch (e) {
       debugPrint("Excepción cargando DatosNeg: $e");
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -183,6 +241,34 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
         debugPrint("No se pudo abrir WhatsApp: $e");
     }
   }
+  
+  // Widget que muestra el logo animado durante la carga
+  Widget _buildLoadingScreen() {
+    return Container(
+      color: Colors.white,
+      child: Center(
+        // Combinamos la Transición de Desvanecimiento (Fade) y Desplazamiento (Slide)
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: SlideTransition(
+            position: _slideAnimation,
+            child: ScaleTransition( // Mantenemos una sutil animación de escala al final de la aparición
+              scale: _scaleAnimation,
+              // Usamos Image.asset con la ruta del archivo SARLUX2.png
+              child: Image.asset(
+                'assets/images/Sarlux_logo.png', // <--- RUTA DE TU IMAGEN
+                width: 150, 
+                height: 150, 
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(Icons.info, size: 80, color: Color(0xFF8C5A3A)), // Fallback por si la imagen no carga
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -190,6 +276,14 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
     final diasOrdenados = [
       "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"
     ];
+    
+    // Si está cargando, muestra la pantalla de carga con el logo animado
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: _buildLoadingScreen(),
+      );
+    }
 
     return Scaffold(
       backgroundColor: secondaryColor,
@@ -255,11 +349,14 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
                             )
                           ],
                         ),
-                        child: CircleAvatar(
+                        child: const CircleAvatar(
                           radius: 45,
-                          backgroundColor: Colors.grey[200],
-                          backgroundImage: const AssetImage('assets/images/logo.png'),
-                          onBackgroundImageError: (_,__) => const Icon(Icons.coffee, size: 40),
+                          backgroundColor: Color.fromARGB(255, 230, 230, 230), // Usar un color gris claro en lugar de Colors.grey[200]
+                          backgroundImage: AssetImage('assets/images/logo.png'),
+                          // Manejo de error de la imagen de logo para el CircleAvatar
+                          // Nota: AssetImage no usa onBackgroundImageError, por lo que usaremos un fallback simple
+                          // Nota 2: Si el logo.png en 'assets/images/logo.png' no existe, esto fallará. Se asume que existe.
+                          child: null, 
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -315,9 +412,9 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         _SocialIcon('assets/images/instagram.png', abrirInstagram, Icons.camera_alt),
-                        Container(width: 1, height: 24, color: Colors.grey[200]),
+                        Container(width: 1, height: 24, color: const Color.fromARGB(255, 224, 224, 224)), // Reemplazando Colors.grey[200]
                         _SocialIcon('assets/images/whatsapp.png', abrirWhatsapp, Icons.message),
-                        Container(width: 1, height: 24, color: Colors.grey[200]),
+                        Container(width: 1, height: 24, color: const Color.fromARGB(255, 224, 224, 224)), // Reemplazando Colors.grey[200]
                         _SocialIcon('assets/images/map.png', abrirUbicacion, Icons.map),
                       ],
                     ),
@@ -342,7 +439,10 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const UniversalMenuPage(tipoServicio: TipoServicio.restaurante),
+                          builder: (_) => UniversalMenuPage(
+                            tipoServicio: TipoServicio.restaurante,
+                            telefonoNegocio: telefonoWhatsapp,
+                          ),
                         ),
                       );
                     },
@@ -357,7 +457,9 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const UniversalMenuPage(tipoServicio: TipoServicio.delivery),
+                          builder: (_) => UniversalMenuPage(
+                            tipoServicio: TipoServicio.delivery,
+                            telefonoNegocio: telefonoWhatsapp,)
                         ),
                       );
                     },
@@ -439,8 +541,8 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> {
             const SizedBox(height: 40),
             
             Text(
-              "v1.0.0 • HyperBit App",
-              style: GoogleFonts.poppins(color: Colors.grey[400], fontSize: 11),
+              "v1.0.0 • SARLUX App",
+              style: GoogleFonts.poppins(color: const Color.fromARGB(255, 189, 189, 189), fontSize: 11), // Reemplazando Colors.grey[400]
             ),
             const SizedBox(height: 30),
           ],
@@ -579,7 +681,7 @@ class _HorarioRow extends StatelessWidget {
         Text(
           days,
           style: GoogleFonts.poppins(
-            color: isBold ? const Color(0xFF8C5A3A) : Colors.black54, 
+            color: isBold ? const Color(0xFF8C5A3A) : const Color.fromARGB(255, 85, 85, 85), // Reemplazando Colors.black54
             fontWeight: isBold ? FontWeight.bold : FontWeight.w500, 
             fontSize: 14
           ),
@@ -587,7 +689,7 @@ class _HorarioRow extends StatelessWidget {
         Text(
           hours,
           style: GoogleFonts.poppins(
-            color: isBold ? const Color(0xFF8C5A3A) : Colors.black87, 
+            color: isBold ? const Color(0xFF8C5A3A) : const Color.fromARGB(255, 51, 51, 51), // Reemplazando Colors.black87
             fontWeight: isBold ? FontWeight.bold : FontWeight.w400, 
             fontSize: 14
           ),

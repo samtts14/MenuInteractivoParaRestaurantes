@@ -11,8 +11,14 @@ enum TipoServicio { restaurante, delivery }
 
 class UniversalMenuPage extends StatefulWidget {
   final TipoServicio tipoServicio;
+  // AÑADIDO: Ahora requerimos el número de teléfono dinámico desde la pantalla anterior
+  final String telefonoNegocio;
 
-  const UniversalMenuPage({super.key, required this.tipoServicio});
+  const UniversalMenuPage({
+    super.key, 
+    required this.tipoServicio,
+    required this.telefonoNegocio, // <-- Nuevo campo requerido
+  });
 
   @override
   State<UniversalMenuPage> createState() => _UniversalMenuPageState();
@@ -21,8 +27,9 @@ class UniversalMenuPage extends StatefulWidget {
 class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- CONFIGURACIÓN ----------------
   final String endpoint =
-      'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=Productos';
-  final String telefonoNegocio = "8293474922";
+      'https://script.google.com/macros/s/AKfycbz--61eiRBC-6fZcwxOOx4EZ6e9KvT5VmrtMhv-6zUQ2hnMF18gYKP_ZYOdCF1PMqnY/exec?table=Productos';
+  // REMOVIDO: Se elimina la variable hardcodeada, ahora se toma de widget.telefonoNegocio
+  // final String telefonoNegocio = "8293474922"; 
 
   // ---------------- ESTADO ----------------
   List<Producto> productos = [];
@@ -168,7 +175,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       carrito.entries.fold(0.0, (s, e) => s + (getPrice(e.key) * e.value));
 
   void enviarPedidoWhatsApp() async {
-    String titulo = esDelivery ? "🛵 *Pedido Delivery*" : "🍽️ *Pedido en Mesa*";
+    String titulo = esDelivery ? "🛵 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
     String mensaje = "$titulo\n\n";
 
     carrito.forEach((p, cant) {
@@ -176,17 +183,18 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           "• ${p.nombre} x$cant - RD\$${(getPrice(p) * cant).toStringAsFixed(0)}\n";
     });
 
-    mensaje += "\n*Total: RD\$${totalCarrito.toStringAsFixed(2)}*";
+    mensaje += "\n*Total de Orden: RD\$${totalCarrito.toStringAsFixed(2)}*";
 
-    if (esDelivery) {
+   /* if (esDelivery) {
       mensaje += "\n\n📍 *Dirección de entrega:* (Escribir aquí)";
       mensaje += "\n📍 *Ubicación:* (Enviar ubicación)";
     } else {
       mensaje += "\n\n🪑 *Mesa:* (Indicar número)";
-    }
+    }*/
 
+    // CAMBIO CLAVE: Usar widget.telefonoNegocio
     final url = Uri.parse(
-        "https://wa.me/$telefonoNegocio?text=${Uri.encodeComponent(mensaje)}");
+        "https://wa.me/${widget.telefonoNegocio}?text=${Uri.encodeComponent(mensaje)}");
     
     try {
         await launchUrl(url, mode: LaunchMode.externalApplication);
@@ -768,22 +776,41 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: cartColor,
-                              padding: const EdgeInsets.symmetric(vertical: 18),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              elevation: 0,
+                        // Lógica de botón condicional: Ocultar si es restaurante, mostrar botón de WhatsApp si es delivery.
+                        if (esDelivery)
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: cartColor,
+                                padding: const EdgeInsets.symmetric(vertical: 18),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                elevation: 0,
+                              ),
+                              onPressed: carrito.isNotEmpty ? enviarPedidoWhatsApp : null,
+                              child: Text(
+                                "Confirmar Delivery 🛵",
+                                style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
                             ),
-                            onPressed: carrito.isNotEmpty ? enviarPedidoWhatsApp : null,
-                            child: Text(
-                              esDelivery ? "Confirmar Dirección 🛵" : "Enviar a Cocina 👨‍🍳",
-                              style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                          )
+                        else
+                          // Mensaje informativo para el mesero (Restaurante)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
+                            child: Row(
+                              children: [
+                                Icon(Icons.info_outline, color: primaryColor, size: 20),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    "Un mesero tomará tu orden en breve.",
+                                    style: GoogleFonts.poppins(fontSize: 13, color: Colors.black54),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
                       ],
                     ),
                   ),
