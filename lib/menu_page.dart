@@ -161,7 +161,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       if (agregar) {
         carrito[p] = (carrito[p] ?? 0) + 1;
         
-        // --- NUEVO: Lógica del checkmark temporal ---
+        // --- Lógica del checkmark temporal ---
         _justAdded[p] = true;
         Timer(const Duration(milliseconds: 700), () {
           if (mounted) {
@@ -172,15 +172,17 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         });
         // ---------------------------------------------
         
-        // Muestra un SnackBar o un pequeño feedback al añadir, si es necesario.
-       /* ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        // REMOVIDO: Eliminamos el SnackBar para no interferir con el feedback visual del checkmark.
+        /*
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('${p.nombre} añadido al carrito.', style: GoogleFonts.poppins()),
             duration: const Duration(milliseconds: 800),
             backgroundColor: primaryColor,
           ),
-        );*/
+        );
+        */
       } else {
         if (carrito[p] != null && carrito[p]! > 1) {
           carrito[p] = carrito[p]! - 1;
@@ -463,7 +465,26 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             Image.network(
               p.imagen,
               fit: BoxFit.cover,
-              errorBuilder: (_,__,___) => Container(color: const Color.fromARGB(255, 224, 224, 224), child: const Icon(Icons.fastfood, color: Colors.grey)), // Reemplazo de Colors.grey[300]
+              // AJUSTE: Mejoramos el errorBuilder para dar feedback de la imagen rota
+              errorBuilder: (_,__,___) => Container(
+                color: const Color.fromARGB(255, 224, 224, 224), 
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.image_not_supported, color: Colors.grey, size: 40),
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Text('Error: Imagen de ${p.nombre} no encontrada.', 
+                          textAlign: TextAlign.center, 
+                          style: GoogleFonts.poppins(color: Colors.grey[700], fontSize: 12)
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
             // Degradado para leer texto
             Container(
@@ -490,7 +511,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        "RD\$${p.precioOferta!.toStringAsFixed(0)}",
+                        // ANTES: "RD\$${p.precioOferta!.toStringAsFixed(0)}", // CRASH aquí si precioOferta es null.
+                        "RD\$${getPrice(p).toStringAsFixed(0)}", // CORREGIDO: Usa getPrice para manejar nulos.
                         style: GoogleFonts.poppins(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
                       ),
                       Container(
