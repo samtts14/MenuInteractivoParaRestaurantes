@@ -36,8 +36,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   List<Producto> productosFiltrados = [];
   String categoriaSeleccionada = "Todas";
   bool cargando = true;
-  final Map<Producto, int> carrito = {};
+  // Usamos un mapa que asocia el Producto al número de unidades
+  final Map<Producto, int> carrito = {}; 
   String filtroBusqueda = '';
+
+  // NUEVO: Mapa para gestionar el estado de "recién añadido" para la animación del checkmark.
+  final Map<Producto, bool> _justAdded = {}; 
 
   // Variables para el Carrusel
   final PageController _pageController = PageController(viewportFraction: 0.85);
@@ -156,6 +160,27 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     setState(() {
       if (agregar) {
         carrito[p] = (carrito[p] ?? 0) + 1;
+        
+        // --- NUEVO: Lógica del checkmark temporal ---
+        _justAdded[p] = true;
+        Timer(const Duration(milliseconds: 700), () {
+          if (mounted) {
+            setState(() {
+              _justAdded.remove(p);
+            });
+          }
+        });
+        // ---------------------------------------------
+        
+        // Muestra un SnackBar o un pequeño feedback al añadir, si es necesario.
+       /* ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${p.nombre} añadido al carrito.', style: GoogleFonts.poppins()),
+            duration: const Duration(milliseconds: 800),
+            backgroundColor: primaryColor,
+          ),
+        );*/
       } else {
         if (carrito[p] != null && carrito[p]! > 1) {
           carrito[p] = carrito[p]! - 1;
@@ -184,13 +209,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     });
 
     mensaje += "\n*Total de Orden: RD\$${totalCarrito.toStringAsFixed(2)}*";
-
-   /* if (esDelivery) {
-      mensaje += "\n\n📍 *Dirección de entrega:* (Escribir aquí)";
-      mensaje += "\n📍 *Ubicación:* (Enviar ubicación)";
-    } else {
-      mensaje += "\n\n🪑 *Mesa:* (Indicar número)";
-    }*/
 
     // CAMBIO CLAVE: Usar widget.telefonoNegocio
     final url = Uri.parse(
@@ -240,10 +258,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             Padding(
               padding: const EdgeInsets.only(right: 16.0),
               child: Center(
-                child: Badge(
-                  backgroundColor: Colors.red,
-                  label: Text('${carrito.values.fold(0, (a, b) => a + b)}'),
-                  child: Icon(Icons.shopping_cart, color: primaryColor),
+                // Envuelve el Badge en un GestureDetector para que sea clickeable
+                child: GestureDetector(
+                  onTap: () => mostrarCarritoModal(context), // Llama al modal al hacer clic
+                  child: Badge(
+                    backgroundColor: Colors.red,
+                    label: Text('${carrito.values.fold(0, (a, b) => a + b)}'),
+                    child: Icon(Icons.shopping_cart, color: primaryColor),
+                  ),
                 ),
               ),
             )
@@ -263,10 +285,10 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     style: GoogleFonts.poppins(),
                     decoration: InputDecoration(
                       hintText: '¿Qué se te antoja hoy?',
-                      hintStyle: GoogleFonts.poppins(color: Colors.grey[400]),
+                      hintStyle: GoogleFonts.poppins(color: const Color.fromARGB(255, 189, 189, 189)), // Reemplazo de Colors.grey[400]
                       prefixIcon: const Icon(Icons.search, color: Colors.grey),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: const Color.fromARGB(255, 245, 245, 245), // Reemplazo de Colors.grey[100]
                       contentPadding: const EdgeInsets.symmetric(horizontal: 20),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(30),
@@ -297,7 +319,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                               duration: const Duration(milliseconds: 200),
                               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                               decoration: BoxDecoration(
-                                color: isSelected ? primaryColor : Colors.grey[100],
+                                color: isSelected ? primaryColor : const Color.fromARGB(255, 245, 245, 245), // Reemplazo de Colors.grey[100]
                                 borderRadius: BorderRadius.circular(25),
                                 boxShadow: isSelected 
                                   ? [BoxShadow(color: primaryColor.withOpacity(0.3), blurRadius: 6, offset: const Offset(0, 3))]
@@ -441,7 +463,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             Image.network(
               p.imagen,
               fit: BoxFit.cover,
-              errorBuilder: (_,__,___) => Container(color: Colors.grey[300], child: const Icon(Icons.fastfood, color: Colors.grey)),
+              errorBuilder: (_,__,___) => Container(color: const Color.fromARGB(255, 224, 224, 224), child: const Icon(Icons.fastfood, color: Colors.grey)), // Reemplazo de Colors.grey[300]
             ),
             // Degradado para leer texto
             Container(
@@ -504,7 +526,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           padding: const EdgeInsets.all(40.0),
           child: Column(
             children: [
-              Icon(Icons.search_off, size: 60, color: Colors.grey[300]),
+              Icon(Icons.search_off, size: 60, color: const Color.fromARGB(255, 189, 189, 189)), // Reemplazo de Colors.grey[300]
               const SizedBox(height: 10),
               Text("No encontramos productos", style: GoogleFonts.poppins(color: Colors.grey)),
             ],
@@ -525,6 +547,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // --- WIDGET: TARJETA DE PRODUCTO (Estilo Llamativo) ---
   Widget _buildProductoCard(Producto p) {
     final bool isOferta = p.enOferta && p.precioOferta != null && p.precioOferta! > 0;
+    // Verifica si el producto fue recién añadido para mostrar el checkmark
+    final bool isJustAdded = _justAdded[p] ?? false;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -539,7 +563,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: () => gestionarCarrito(p, true),
+          onTap: () => _showProductDetails(p), // <-- Abre el modal de detalles
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
@@ -557,8 +581,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       fit: BoxFit.cover,
                       cacheWidth: 250, 
                       errorBuilder: (_,__,___) => Container(
-                        width: 100, height: 100, color: Colors.grey[100], 
-                        child: Icon(Icons.fastfood, color: Colors.grey[300]),
+                        width: 100, height: 100, color: const Color.fromARGB(255, 245, 245, 245), // Reemplazo de Colors.grey[100]
+                        child: Icon(Icons.fastfood, color: const Color.fromARGB(255, 189, 189, 189)), // Reemplazo de Colors.grey[300]
                       ),
                     ),
                   ),
@@ -580,7 +604,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       const SizedBox(height: 4),
                       Text(
                         p.descripcion,
-                        style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
+                        style: GoogleFonts.poppins(fontSize: 12, color: const Color.fromARGB(255, 117, 117, 117)), // Reemplazo de Colors.grey[600]
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -593,23 +617,35 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             children: [
                               Text(
                                 isOferta ? "RD\$${p.precioOferta!.toStringAsFixed(0)}" : "RD\$${p.precio.toStringAsFixed(0)}",
-                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: isOferta ? Colors.red[700] : primaryColor),
+                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: const Color.fromARGB(255, 211, 47, 47)), // Reemplazo de Colors.red[700]
                               ),
                               if (isOferta)
                                 Text(
                                   "RD\$${p.precio.toStringAsFixed(0)}",
-                                  style: GoogleFonts.poppins(decoration: TextDecoration.lineThrough, fontSize: 11, color: Colors.grey[400]),
+                                  style: GoogleFonts.poppins(decoration: TextDecoration.lineThrough, fontSize: 11, color: const Color.fromARGB(255, 189, 189, 189)), // Reemplazo de Colors.grey[400]
                                 ),
                             ],
                           ),
-                          // Botón Agregar más llamativo
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: secondaryColor,
+                          // Botón Agregar con animación de checkmark
+                          Material( 
+                            color: Colors.transparent,
+                            child: InkWell(
                               borderRadius: BorderRadius.circular(10),
+                              onTap: () => gestionarCarrito(p, true), // <-- Añade al carrito solo al tocar el '+'
+                              child: AnimatedContainer( // <-- Animación de color e ícono
+                                duration: const Duration(milliseconds: 300),
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: isJustAdded ? cartColor : secondaryColor, // Color verde temporal si se añade
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  isJustAdded ? Icons.check_rounded : Icons.add_rounded, 
+                                  size: 24, 
+                                  color: isJustAdded ? Colors.white : primaryColor // Icono blanco si es check, primario si es '+'
+                                ),
+                              ),
                             ),
-                            child: Icon(Icons.add_rounded, size: 24, color: primaryColor),
                           )
                         ],
                       )
@@ -633,7 +669,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       itemBuilder: (_, __) => Container(
         width: 80,
         margin: const EdgeInsets.only(right: 10),
-        decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20)),
+        decoration: BoxDecoration(color: const Color.fromARGB(255, 245, 245, 245), borderRadius: BorderRadius.circular(20)), // Reemplazo de Colors.grey[100]
       ),
     );
   }
@@ -646,7 +682,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           height: 180,
           margin: const EdgeInsets.fromLTRB(16, 16, 16, 20),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-          child: Container(decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20))),
+          child: Container(decoration: BoxDecoration(color: const Color.fromARGB(255, 245, 245, 245), borderRadius: BorderRadius.circular(20))), // Reemplazo de Colors.grey[100]
         ),
         // Skeleton Items
         ...List.generate(3, (index) => Container(
@@ -655,17 +691,17 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
           child: Row(
             children: [
-              Container(width: 100, height: 100, decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(12))),
+              Container(width: 100, height: 100, decoration: BoxDecoration(color: const Color.fromARGB(255, 245, 245, 245), borderRadius: BorderRadius.circular(12))), // Reemplazo de Colors.grey[100]
               const SizedBox(width: 15),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Container(width: 120, height: 16, color: Colors.grey[100]),
+                  Container(width: 120, height: 16, color: const Color.fromARGB(255, 245, 245, 245)), // Reemplazo de Colors.grey[100]
                   const SizedBox(height: 8),
-                  Container(width: 180, height: 12, color: Colors.grey[100]),
+                  Container(width: 180, height: 12, color: const Color.fromARGB(255, 245, 245, 245)), // Reemplazo de Colors.grey[100]
                   const SizedBox(height: 20),
                   Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Container(width: 60, height: 16, color: Colors.grey[100]),
-                    Container(width: 30, height: 30, color: Colors.grey[100]),
+                    Container(width: 60, height: 16, color: const Color.fromARGB(255, 245, 245, 245)), // Reemplazo de Colors.grey[100]
+                    Container(width: 30, height: 30, color: const Color.fromARGB(255, 245, 245, 245)), // Reemplazo de Colors.grey[100]
                   ])
                 ]),
               )
@@ -676,14 +712,183 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
+  // --- MODAL DETALLES DEL PRODUCTO (Nuevo) ---
+  void _showProductDetails(Producto p) {
+    final bool isOferta = p.enOferta && p.precioOferta != null && p.precioOferta! > 0;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.9, // Casi toda la pantalla
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+          ),
+          child: Column(
+            children: [
+              // Barra superior para cerrar
+              Padding(
+                padding: const EdgeInsets.only(top: 15, bottom: 8),
+                child: Container(width: 50, height: 5, decoration: BoxDecoration(color: const Color.fromARGB(255, 189, 189, 189), borderRadius: BorderRadius.circular(10))),
+              ),
+
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // IMAGEN
+                      Hero(
+                        tag: p.nombre + (isOferta ? 'list' : ''), // Mismo tag que en la lista para animación
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.only(topLeft: Radius.circular(25), topRight: Radius.circular(25)),
+                          child: Image.network(
+                            p.imagen,
+                            height: 250,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_,__,___) => Container(
+                              height: 250,
+                              color: const Color.fromARGB(255, 224, 224, 224),
+                              child: const Center(child: Icon(Icons.fastfood, size: 80, color: Colors.grey)),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      // DETALLES DEL TEXTO
+                      Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              p.nombre,
+                              style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.bold, color: accentColor),
+                            ),
+                            const SizedBox(height: 8),
+                            if (p.categoria.isNotEmpty)
+                              Text(
+                                p.categoria,
+                                style: GoogleFonts.poppins(fontSize: 16, color: primaryColor, fontWeight: FontWeight.w600),
+                              ),
+                            const SizedBox(height: 16),
+                            Text(
+                              p.descripcion,
+                              style: GoogleFonts.poppins(fontSize: 16, height: 1.5, color: Colors.black87),
+                            ),
+                            const SizedBox(height: 30),
+                            Text(
+                              "Ingredientes / Notas de Sabor:",
+                              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor),
+                            ),
+                            const SizedBox(height: 8),
+                            // Mostrar notas adicionales si existen (asumiendo que están en la descripción o en otro campo)
+                            Text(
+                              // CORRECCIÓN TEMPORAL: Se reemplaza p.detalles (que no existe) con un placeholder.
+                              "Nota: La información de 'Ingredientes/Notas' requiere el campo 'detalles' en la clase Producto (productos.dart).",
+                              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // BARRA INFERIOR (Precio y Botón Añadir)
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: secondaryColor,
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))]
+                ),
+                child: SafeArea(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Precio:",
+                            style: GoogleFonts.poppins(fontSize: 14, color: Colors.black54),
+                          ),
+                          Row(
+                            children: [
+                              Text(
+                                "RD\$${getPrice(p).toStringAsFixed(2)}",
+                                style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: primaryColor),
+                              ),
+                              if (isOferta)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8.0),
+                                  child: Text(
+                                    "RD\$${p.precio.toStringAsFixed(0)}",
+                                    style: GoogleFonts.poppins(
+                                      decoration: TextDecoration.lineThrough,
+                                      fontSize: 16,
+                                      color: Colors.grey[500],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      
+                      // Botón para añadir al carrito
+                      SizedBox(
+                        width: 180,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            gestionarCarrito(p, true);
+                            Navigator.pop(context); // Cierra el modal después de añadir
+                          },
+                          icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
+                          label: Text(
+                            "Añadir",
+                            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: cartColor,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                            elevation: 5,
+                          ),
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   // --- MODAL CARRITO (Mismo estilo funcional) ---
   void mostrarCarritoModal(BuildContext context) {
+    // Obtenemos una lista de las entradas del carrito (Producto y Cantidad)
+    final carritoEntries = carrito.entries.toList();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (c) => StatefulBuilder(
         builder: (context, setModalState) {
+          // CLAVE: Recalculamos la lista de entradas y la cantidad DENTRO de setModalState
+          // Esto es importante porque setModalState no devuelve el contexto con el estado
+          // actualizado, sino que solo fuerza el re-renderizado.
+          final currentEntries = carrito.entries.toList();
+
           return Container(
             height: MediaQuery.of(context).size.height * 0.85,
             decoration: const BoxDecoration(
@@ -693,7 +898,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             child: Column(
               children: [
                 const SizedBox(height: 15),
-                Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))),
+                Container(width: 50, height: 5, decoration: BoxDecoration(color: const Color.fromARGB(255, 189, 189, 189), borderRadius: BorderRadius.circular(10))), // Reemplazo de Colors.grey[300]
                 Padding(
                   padding: const EdgeInsets.all(24),
                   child: Row(
@@ -705,22 +910,28 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   ),
                 ),
                 Expanded(
-                  child: carrito.isEmpty
+                  child: currentEntries.isEmpty
                       ? Center(child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.shopping_basket_outlined, size: 80, color: Colors.grey[200]),
+                            Icon(Icons.shopping_basket_outlined, size: 80, color: const Color.fromARGB(255, 230, 230, 230)), // Reemplazo de Colors.grey[200]
                             const SizedBox(height: 10),
                             Text("Tu carrito está vacío 😔", style: GoogleFonts.poppins(color: Colors.grey)),
                           ],
                         ))
                       : ListView.separated(
                           padding: const EdgeInsets.symmetric(horizontal: 24),
-                          itemCount: carrito.length,
+                          itemCount: currentEntries.length, // Usamos la lista de entradas actualizadas
                           separatorBuilder: (_,__) => const Divider(height: 30),
                           itemBuilder: (context, index) {
-                            final p = carrito.keys.elementAt(index);
-                            final cant = carrito[p]!;
+                            final entry = currentEntries[index];
+                            final p = entry.key;
+                            // OBTENEMOS LA CANTIDAD DEL MAPA INTERNO DEL ESTADO, NO DE LA ENTRADA VIEJA
+                            final cant = carrito[p] ?? 0; // Usamos el valor actual del mapa
+
+                            // Si la cantidad es 0 (porque se acaba de eliminar), ignoramos este item
+                            if (cant == 0) return const SizedBox.shrink();
+
                             return Row(
                               children: [
                                 ClipRRect(
@@ -739,18 +950,36 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                 ),
                                 Row(
                                   children: [
-                                    _btnCant(Icons.remove, cant == 1 ? Colors.red[50]! : Colors.grey[100]!, cant == 1 ? Colors.red : Colors.black87, () {
-                                      gestionarCarrito(p, false);
-                                      setModalState((){});
-                                      setState((){});
-                                      if (carrito.isEmpty) Navigator.pop(context);
-                                    }),
-                                    SizedBox(width: 30, child: Center(child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)))),
-                                    _btnCant(Icons.add, Colors.green[50]!, Colors.green[700]!, () {
-                                      gestionarCarrito(p, true);
-                                      setModalState((){});
-                                      setState((){});
-                                    }),
+                                    _btnCant(
+                                      Icons.remove, 
+                                      cant == 1 ? const Color.fromARGB(255, 255, 235, 238) : const Color.fromARGB(255, 245, 245, 245), // Reemplazo de Colors.red[50]! y Colors.grey[100]!
+                                      cant == 1 ? Colors.red : Colors.black87, 
+                                      () {
+                                        gestionarCarrito(p, false);
+                                        // CLAVE: Forzamos la actualización del modal
+                                        setModalState((){}); 
+                                        setState((){}); 
+                                        if (carrito.isEmpty) Navigator.pop(context); 
+                                      }
+                                    ),
+                                    SizedBox(
+                                      width: 30, 
+                                      child: Center(
+                                        // CLAVE: Aquí usamos el valor actual 'cant'
+                                        child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16))
+                                      )
+                                    ),
+                                    _btnCant(
+                                      Icons.add, 
+                                      const Color.fromARGB(255, 232, 245, 233), // Reemplazo de Colors.green[50]!
+                                      const Color.fromARGB(255, 27, 94, 32), // Reemplazo de Colors.green[700]!
+                                      () {
+                                        gestionarCarrito(p, true);
+                                        // CLAVE: Forzamos la actualización del modal
+                                        setModalState((){});
+                                        setState((){});
+                                      }
+                                    ),
                                   ],
                                 )
                               ],
@@ -772,6 +1001,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text("Total", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold)),
+                            // Usamos totalCarrito que se recalcula con setState
                             Text("RD\$${totalCarrito.toStringAsFixed(2)}", style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: primaryColor)),
                           ],
                         ),

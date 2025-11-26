@@ -352,7 +352,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         child: const CircleAvatar(
                           radius: 45,
                           backgroundColor: Color.fromARGB(255, 230, 230, 230), // Usar un color gris claro en lugar de Colors.grey[200]
-                          backgroundImage: AssetImage('assets/images/logo.png'),
+                          backgroundImage: AssetImage('assets/images/Sarlux_logo.png'),
                           // Manejo de error de la imagen de logo para el CircleAvatar
                           // Nota: AssetImage no usa onBackgroundImageError, por lo que usaremos un fallback simple
                           // Nota 2: Si el logo.png en 'assets/images/logo.png' no existe, esto fallará. Se asume que existe.
@@ -496,7 +496,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         Icon(Icons.access_time_filled, color: primaryColor, size: 22),
                         const SizedBox(width: 10),
                         Text(
-                          'HORARIO DE ATENCIÓN',
+                          'NUESTRO HORARIO',
                           style: GoogleFonts.poppins(
                             fontWeight: FontWeight.bold,
                             color: primaryColor,
