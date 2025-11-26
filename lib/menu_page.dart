@@ -511,8 +511,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        // ANTES: "RD\$${p.precioOferta!.toStringAsFixed(0)}", // CRASH aquí si precioOferta es null.
-                        "RD\$${getPrice(p).toStringAsFixed(0)}", // CORREGIDO: Usa getPrice para manejar nulos.
+                        "RD\$${getPrice(p).toStringAsFixed(0)}", 
                         style: GoogleFonts.poppins(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
                       ),
                       Container(
@@ -798,6 +797,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                 style: GoogleFonts.poppins(fontSize: 16, color: primaryColor, fontWeight: FontWeight.w600),
                               ),
                             const SizedBox(height: 16),
+                            // Descripción corta (sección 'Descripción' del sheet)
                             Text(
                               p.descripcion,
                               style: GoogleFonts.poppins(fontSize: 16, height: 1.5, color: Colors.black87),
@@ -808,10 +808,9 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                               style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor),
                             ),
                             const SizedBox(height: 8),
-                            // Mostrar notas adicionales si existen (asumiendo que están en la descripción o en otro campo)
+                            // CAMBIO APLICADO: Ahora usamos el campo 'p.ingredientes'
                             Text(
-                              // CORRECCIÓN TEMPORAL: Se reemplaza p.detalles (que no existe) con un placeholder.
-                              "Nota: La información de 'Ingredientes/Notas' requiere el campo 'detalles' en la clase Producto (productos.dart).",
+                              p.ingredientes, 
                               style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
                             ),
                           ],

@@ -5,7 +5,8 @@ String normalizar(String texto) => removeDiacritics(texto.toLowerCase());
 class Producto {
   final String id;
   final String nombre;
-  final String descripcion;
+  final String descripcion; // Descripción corta (como se usa en la lista)
+  final String ingredientes; // Descripción larga / Ingredientes
   final double precio;
   final double? precioOferta;
   final String imagen;
@@ -17,6 +18,7 @@ class Producto {
     required this.id,
     required this.nombre,
     required this.descripcion,
+    required this.ingredientes, // <--- CAMBIO: Nuevo campo
     required this.precio,
     required this.imagen,
     required this.categoria,
@@ -28,8 +30,11 @@ class Producto {
   factory Producto.fromJson(Map<String, dynamic> json) {
     final id = (json['ID'] ?? json['Id'] ?? json['id'] ?? '').toString();
     final nombre = (json['Nombre del Producto'] ?? json['Nombre'] ?? json['Producto'] ?? '').toString();
-    final descripcion = (json['Descripción'] ?? json['Descripcion'] ?? '').toString();
     
+    // CAMBIO CLAVE: Asignamos 'Descripción' (corta) y 'Ingredientes' (larga)
+    final descripcion = (json['Descripción'] ?? json['Descripcion'] ?? '').toString();
+    final ingredientes = (json['Ingredientes'] ?? json['ingredientes'] ?? '').toString();
+
     final precio = double.tryParse((json['Precio'] ?? json['price'] ?? '0').toString()) ?? 0.0;
     
     final ofertaRaw = (json['Precio de Oferta'] ?? json['precio_oferta'] ?? null);
@@ -50,6 +55,7 @@ class Producto {
       id: id,
       nombre: nombre,
       descripcion: descripcion,
+      ingredientes: ingredientes, // <--- CAMBIO: Mapeo del nuevo campo
       precio: precio,
       imagen: imagen,
       categoria: categoria,
