@@ -42,7 +42,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
 
   // URL del Script apuntando a la pestaña 'DatosNeg' en el MISMO sheet.
   final String endpointInfo =
-      'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=DatosNeg';
+      'https://script.google.com/macros/s/AKfycbwr-CKWRDD0RLxbvfGnlC12wMnBJfPjwRd72YPuCI9bAZW-uHUFrv-EbqC8UJScgoWi/exec?table=DatosNeg';
 
   @override
   void initState() {
