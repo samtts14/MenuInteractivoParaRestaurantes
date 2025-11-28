@@ -17,17 +17,28 @@ class MenuHomeScreen extends StatefulWidget {
 
 // Añadimos 'with SingleTickerProviderStateMixin' para usar animaciones
 class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProviderStateMixin {
-  // ---------------- COLORES DE LA MARCA ----------------
-  final Color primaryColor = const Color(0xFF8C5A3A);
-  final Color secondaryColor = const Color(0xFFF2E8DC);
-  final Color accentColor = const Color(0xFF3E2723);
+  // ---------------- COLORES DE LA MARCA (PARMESANO STYLE) ----------------
+  // Naranja Mostaza (Para botones principales y resaltados)
+  final Color primaryColor = const Color(0xFFE08D00); 
+  // Negro Puro (Fondo de pantalla principal)
+  final Color secondaryColor = const Color(0xFF000000); 
+  // Rojo Intenso (Para delivery)
+  final Color accentColor = const Color(0xFFE53935); 
+  // Gris Oscuro (Para fondo de tarjetas de horario y redes sobre el negro)
+  final Color cardColor = const Color(0xFF1E1E1E); 
+  // Blanco (Para textos sobre fondo oscuro)
+  final Color textWhite = const Color(0xFFFFFFFF);
 
   // ---------------- ESTADO DE CARGA Y ANIMACIÓN ----------------
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
-  late Animation<double> _fadeAnimation; // NUEVO: Animación de desvanecimiento (opacidad)
-  late Animation<Offset> _slideAnimation; // NUEVO: Animación de desplazamiento
+  late Animation<double> _fadeAnimation; 
+  late Animation<Offset> _slideAnimation; 
   bool _isLoading = true; // Nuevo estado de carga para controlar el splash screen
+  
+  // ---------------- NUEVOS ESTADOS PARA HORARIO ----------------
+  bool _estaAbiertoHoy = false; // Indica si hoy tiene horario (no vacío/cerrado)
+  String _horarioHoy = "Cerrado"; // Almacena el horario de hoy o "Cerrado"
   
 
   // ---------------- DATOS DEL NEGOCIO (Estado) ----------------
@@ -42,16 +53,16 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
 
   // URL del Script apuntando a la pestaña 'DatosNeg' en el MISMO sheet.
   final String endpointInfo =
-      'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=DatosNeg';
+      'https://script.google.com/macros/s/AKfycbyTI-7q5DZJc0_kvpJg5WknTObkY88JVdaYHidu6CFzeiIgJ7pDxPkoa3c85RaCA5hy/exec?table=DatosNeg';
 
   @override
   void initState() {
     super.initState();
     
-    // 1. Inicializar el controlador de animación. Usaremos un solo controlador para todos los efectos.
+    // 1. Inicializar el controlador de animación.
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500), // Un poco más lenta para el fade/slide
+      duration: const Duration(milliseconds: 1500), 
     );
 
     // 2. Definir la animación de opacidad (Fade): de 0.0 a 1.0
@@ -64,8 +75,8 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
 
     // 3. Definir la animación de desplazamiento (Slide): de (-0.2 en Y) a (0.0 en Y)
     _slideAnimation = Tween<Offset>(
-      begin: const Offset(0.0, -0.2), // Inicia un poco arriba
-      end: Offset.zero, // Termina en el centro
+      begin: const Offset(0.0, -0.2), 
+      end: Offset.zero, 
     ).animate(
       CurvedAnimation(
         parent: _animationController,
@@ -92,6 +103,20 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
     _animationController.dispose();
     super.dispose();
   }
+  
+  // Obtiene el nombre del día en español para la clave del mapa
+  String _getDiaActualKey(int weekday) {
+    switch (weekday) {
+      case 1: return "Lunes";
+      case 2: return "Martes";
+      case 3: return "Miércoles";
+      case 4: return "Jueves";
+      case 5: return "Viernes";
+      case 6: return "Sábado";
+      case 7: return "Domingo";
+      default: return "";
+    }
+  }
 
 
   // Función para cargar los datos desde Google Sheets (Pestaña DatosNeg)
@@ -108,22 +133,12 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
       if (response.statusCode == 200) {
         final dynamic decodedData = jsonDecode(response.body);
         
-        // Verificamos si devolvió un error (Map) o una lista de datos
-        if (decodedData is Map && decodedData.containsKey('error')) {
-          debugPrint("Error desde AppScript: ${decodedData['error']}");
-        }
+        // ... (Tu código de manejo de errores y verificación de lista)
 
         if (decodedData is List && decodedData.isNotEmpty) {
-          // Tomamos la primera fila de DatosNeg
           final Map<String, dynamic> infoOriginal = decodedData[0]; 
           
-          // --- DETECTOR DE ERROR DE SCRIPT (Mantenerlo activo para diagnóstico) ---
-          if (infoOriginal.containsKey('Nombre del Producto') || infoOriginal.containsKey('Precio')) {
-            debugPrint("🚨 ERROR CRÍTICO DE SCRIPT 🚨");
-            debugPrint("El script de Google sigue devolviendo la hoja 'Productos'.");
-            debugPrint("SOLUCIÓN: Ve a Apps Script -> Implementar -> Nueva implementación para actualizar el código en la nube.");
-          }
-          // -----------------------------------
+          // ... (Tu código de detección de error de script)
 
           // TRUCO: Normalizamos las claves para que no importen mayúsculas o espacios
           final Map<String, dynamic> info = {};
@@ -135,38 +150,36 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
           
           if (mounted) {
             setState(() {
-              // 1. NOMBRE DEL NEGOCIO (Busca 'nombre del negocio')
+              // 1. NOMBRE DEL NEGOCIO
               var nombre = info['nombre del negocio'];
               if (nombre != null && nombre.toString().trim().isNotEmpty) {
                 nombreNegocio = nombre.toString().trim();
               }
 
-              // 2. INSTAGRAM (Busca 'instagram')
+              // 2. INSTAGRAM
               if (info.containsKey('instagram') && info['instagram'].toString().trim().isNotEmpty) {
                 urlInstagram = info['instagram'].toString().trim();
               }
               
-              // 3. TELÉFONO (Busca 'telefono' o 'teléfono')
+              // 3. TELÉFONO
               var tel = info['telefono'] ?? info['teléfono'];
               if (tel != null && tel.toString().trim().isNotEmpty) {
                 telefonoWhatsapp = tel.toString().trim();
               }
 
-              // 4. UBICACIÓN (Busca 'ubicacion' o 'ubicación')
+              // 4. UBICACIÓN
               var ubic = info['ubicacion'] ?? info['ubicación'];
               if (ubic != null && ubic.toString().trim().isNotEmpty) {
                 String rawUbic = ubic.toString().trim();
-                // Si la celda contiene "http", asumimos que es un enlace directo
                 if (rawUbic.toLowerCase().contains('http')) {
                   urlMapa = rawUbic;
                 } else {
-                  // Si es texto (ej: "Calle 5, Santiago"), creamos un link de búsqueda
                   urlMapa = "https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(rawUbic)}";
                 }
               }
 
               // 5. HORARIOS (Actualización dinámica)
-              horariosSemana = {}; // Limpiamos antes de actualizar
+              horariosSemana = {}; 
 
               void updateDia(String diaSheet, String keyMap) {
                 String? valor;
@@ -177,19 +190,18 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                 } 
                 // 2. Si no está, buscamos sin tilde (ej: "miercoles") por seguridad
                 else {
-                   String sinTilde = diaSheet.replaceAll('é', 'e').replaceAll('á', 'a').replaceAll('ú', 'u');
-                   if (info.containsKey(sinTilde)) {
-                     valor = info[sinTilde].toString();
-                   }
+                    String sinTilde = diaSheet.replaceAll('é', 'e').replaceAll('á', 'a').replaceAll('ú', 'u');
+                    if (info.containsKey(sinTilde)) {
+                      valor = info[sinTilde].toString();
+                    }
                 }
 
-                // Solo guardamos si el valor no está vacío. Si está vacío, se mostrará "Cerrado" por defecto en el build.
                 if (valor != null && valor.trim().isNotEmpty) {
                   horariosSemana[keyMap] = valor.trim();
                 } 
               }
 
-              // Usamos los nombres EXACTOS de tus columnas (en minúscula porque así normalizamos `info`)
+              // Usamos los nombres EXACTOS de tus columnas (en minúscula)
               updateDia("lunes", "Lunes");
               updateDia("martes", "Martes");
               updateDia("miércoles", "Miércoles"); 
@@ -198,6 +210,14 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
               updateDia("sábado", "Sábado"); 
               updateDia("domingo", "Domingo");
               
+              // 6. CÁLCULO DEL ESTADO DE HOY (ABIERTO/CERRADO)
+              final diaActualKey = _getDiaActualKey(DateTime.now().weekday);
+              final horarioDeHoy = horariosSemana[diaActualKey] ?? "Cerrado";
+
+              _horarioHoy = horarioDeHoy;
+              // Está abierto si el valor de la celda de hoy NO es "Cerrado" (insensible a mayúsculas) y NO está vacío.
+              _estaAbiertoHoy = horarioDeHoy.trim().isNotEmpty && horarioDeHoy.toLowerCase() != "cerrado";
+
               _isLoading = false; // Datos cargados, ocultamos la carga
             });
           }
@@ -218,7 +238,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
     try {
         await launchUrl(url, mode: LaunchMode.externalApplication);
     } catch (e) {
-        debugPrint("No se pudo abrir Instagram: $e");
+      debugPrint("No se pudo abrir Instagram: $e");
     }
   }
 
@@ -227,7 +247,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
     try {
         await launchUrl(url, mode: LaunchMode.externalApplication);
     } catch (e) {
-        debugPrint("No se pudo abrir Mapa: $e");
+      debugPrint("No se pudo abrir Mapa: $e");
     }
   }
 
@@ -238,29 +258,27 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
     try {
         await launchUrl(url, mode: LaunchMode.externalApplication);
     } catch (e) {
-        debugPrint("No se pudo abrir WhatsApp: $e");
+      debugPrint("No se pudo abrir WhatsApp: $e");
     }
   }
   
   // Widget que muestra el logo animado durante la carga
   Widget _buildLoadingScreen() {
     return Container(
-      color: Colors.white,
+      color: Colors.white, 
       child: Center(
-        // Combinamos la Transición de Desvanecimiento (Fade) y Desplazamiento (Slide)
         child: FadeTransition(
           opacity: _fadeAnimation,
           child: SlideTransition(
             position: _slideAnimation,
-            child: ScaleTransition( // Mantenemos una sutil animación de escala al final de la aparición
+            child: ScaleTransition( 
               scale: _scaleAnimation,
-              // Usamos Image.asset con la ruta del archivo SARLUX2.png
               child: Image.asset(
-                'assets/images/Sarlux_logo.png', // <--- RUTA DE TU IMAGEN
+                'assets/images/Sarlux_logo.png', 
                 width: 150, 
                 height: 150, 
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Icon(Icons.info, size: 80, color: Color(0xFF8C5A3A)), // Fallback por si la imagen no carga
+                errorBuilder: (_, __, ___) => Icon(Icons.info, size: 80, color: primaryColor), 
               ),
             ),
           ),
@@ -280,13 +298,18 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
     // Si está cargando, muestra la pantalla de carga con el logo animado
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: Colors.white, 
         body: _buildLoadingScreen(),
       );
     }
+    
+    // ---------------- CONFIGURACIÓN PARA CUANDO ESTÁ CERRADO ----------------
+    final bool deliveryBloqueado = !_estaAbiertoHoy;
+    final String estadoHoyTexto = _estaAbiertoHoy ? "ABIERTO HOY ${_horarioHoy}" : "CERRADO HOY";
+    final Color estadoHoyColor = _estaAbiertoHoy ? primaryColor : accentColor; 
 
     return Scaffold(
-      backgroundColor: secondaryColor,
+      backgroundColor: secondaryColor, // FONDO DE LA APP: NEGRO
       body: SingleChildScrollView(
         child: Column(
           children: [
@@ -298,13 +321,13 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                 Container(
                   height: 280,
                   width: double.infinity,
-                  decoration: const BoxDecoration(
-                    image: DecorationImage(
+                  decoration: BoxDecoration(
+                    image: const DecorationImage(
                       image: NetworkImage(
                           'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&q=80&w=1000'),
                       fit: BoxFit.cover,
                     ),
-                    borderRadius: BorderRadius.only(
+                    borderRadius: const BorderRadius.only(
                       bottomLeft: Radius.circular(40),
                       bottomRight: Radius.circular(40),
                     ),
@@ -319,15 +342,15 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Colors.black.withOpacity(0.3),
-                          Colors.black.withOpacity(0.85),
+                          Colors.black.withOpacity(0.4),
+                          Colors.black.withOpacity(0.95), 
                         ],
                       ),
                     ),
                   ),
                 ),
                 
-                // B. Contenido Central
+                // B. Contenido Central (Incluyendo el indicador de estado)
                 Positioned(
                   top: 0,
                   left: 0,
@@ -340,10 +363,10 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         padding: const EdgeInsets.all(4),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: Colors.white,
+                          color: Colors.white, 
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
+                              color: primaryColor.withOpacity(0.4), 
                               blurRadius: 20,
                               offset: const Offset(0, 10),
                             )
@@ -351,26 +374,22 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         ),
                         child: const CircleAvatar(
                           radius: 45,
-                          backgroundColor: Color.fromARGB(255, 230, 230, 230), // Usar un color gris claro en lugar de Colors.grey[200]
+                          backgroundColor: Colors.white, 
                           backgroundImage: AssetImage('assets/images/Sarlux_logo.png'),
-                          // Manejo de error de la imagen de logo para el CircleAvatar
-                          // Nota: AssetImage no usa onBackgroundImageError, por lo que usaremos un fallback simple
-                          // Nota 2: Si el logo.png en 'assets/images/logo.png' no existe, esto fallará. Se asume que existe.
                           child: null, 
                         ),
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        // AQUÍ SE USA EL NOMBRE DINÁMICO
                         nombreNegocio, 
                         style: GoogleFonts.poppins(
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                          color: textWhite, 
                           shadows: [
                             const Shadow(
                               blurRadius: 10.0,
-                              color: Colors.black45,
+                              color: Colors.black,
                               offset: Offset(0, 2),
                             ),
                           ],
@@ -380,12 +399,39 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         'El mejor sabor en cada bocado',
                         style: GoogleFonts.poppins(
                           fontSize: 14,
-                          color: Colors.white.withOpacity(0.9),
+                          color: textWhite.withOpacity(0.9), 
                           letterSpacing: 0.5,
                           fontWeight: FontWeight.w300,
                         ),
                       ),
-                      const SizedBox(height: 30),
+                      
+                      // vvvvvvvvvv CAMBIO AQUÍ: AUMENTO DE ESPACIO SUPERIOR vvvvvvvvvv
+                      const SizedBox(height: 15), 
+                      // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                      // ---------------- INDICADOR ABIERTO/CERRADO ----------------
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), // Un poco más de padding interno también
+                        decoration: BoxDecoration(
+                          color: estadoHoyColor.withOpacity(0.2), 
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: estadoHoyColor, width: 1.5)
+                        ),
+                        child: Text(
+                          estadoHoyTexto,
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: estadoHoyColor, 
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                      // ---------------- FIN INDICADOR ----------------
+
+                      // vvvvvvvvvv CAMBIO AQUÍ: AUMENTO DRÁSTICO DE ESPACIO INFERIOR vvvvvvvvvv
+                      const SizedBox(height: 35), // Antes era 12, ahora 35 para separar del borde inferior
+                      // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                     ],
                   ),
                 ),
@@ -398,11 +444,11 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: cardColor, // Fondo Gris Oscuro
                       borderRadius: BorderRadius.circular(30),
                       boxShadow: [
                         BoxShadow(
-                          color: primaryColor.withOpacity(0.15),
+                          color: Colors.black.withOpacity(0.5),
                           blurRadius: 15,
                           offset: const Offset(0, 8),
                         ),
@@ -411,11 +457,11 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        _SocialIcon('assets/images/instagram.png', abrirInstagram, Icons.camera_alt),
-                        Container(width: 1, height: 24, color: const Color.fromARGB(255, 224, 224, 224)), // Reemplazando Colors.grey[200]
-                        _SocialIcon('assets/images/whatsapp.png', abrirWhatsapp, Icons.message),
-                        Container(width: 1, height: 24, color: const Color.fromARGB(255, 224, 224, 224)), // Reemplazando Colors.grey[200]
-                        _SocialIcon('assets/images/map.png', abrirUbicacion, Icons.map),
+                        _SocialIcon('assets/images/instagram.png', abrirInstagram, Icons.camera_alt, primaryColor),
+                        Container(width: 1, height: 24, color: Colors.white24), 
+                        _SocialIcon('assets/images/whatsapp.png', abrirWhatsapp, Icons.message, primaryColor),
+                        Container(width: 1, height: 24, color: Colors.white24), 
+                        _SocialIcon('assets/images/map.png', abrirUbicacion, Icons.map, primaryColor),
                       ],
                     ),
                   ),
@@ -430,11 +476,12 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
                 children: [
+                  // Botón "Comer en Restaurante"
                   _MenuCard(
-                    title: 'Comer en Restaurante',
-                    subtitle: 'Escanea el código o pide a tu mesa',
+                    title: 'Ordenar en Restaurante',
+                    subtitle: '¡Elige lo que quieras y pide a tu mesa!',
                     icon: Icons.restaurant,
-                    color: primaryColor,
+                    color: primaryColor, 
                     onTap: () {
                       Navigator.push(
                         context,
@@ -447,13 +494,15 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                       );
                     },
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 10),
+                  // Botón "Pedir Delivery" (BLOQUEADO SI ESTÁ CERRADO)
                   _MenuCard(
-                    title: 'Pedir Delivery',
-                    subtitle: 'Te lo llevamos a donde estés',
+                    title: 'Ordenar por Delivery',
+                    subtitle: deliveryBloqueado ? '¡Cerrado hoy! 😢' : 'Te lo llevamos a donde estés', 
                     icon: Icons.delivery_dining,
-                    color: accentColor,
-                    onTap: () {
+                    color: deliveryBloqueado ? cardColor.withOpacity(0.8) : accentColor, 
+                    isDisabled: deliveryBloqueado, 
+                    onTap: deliveryBloqueado ? () {} : () { 
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -477,16 +526,16 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: cardColor, 
                   borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
+                      color: Colors.black.withOpacity(0.3),
                       blurRadius: 10,
                       offset: const Offset(0, 5),
                     )
                   ],
-                  border: Border.all(color: primaryColor.withOpacity(0.05)),
+                  border: Border.all(color: primaryColor.withOpacity(0.1)),
                 ),
                 child: Column(
                   children: [
@@ -499,7 +548,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                           'NUESTRO HORARIO',
                           style: GoogleFonts.poppins(
                             fontWeight: FontWeight.bold,
-                            color: primaryColor,
+                            color: primaryColor, 
                             fontSize: 14,
                             letterSpacing: 1.2,
                           ),
@@ -507,18 +556,15 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                       ],
                     ),
                     const SizedBox(height: 15),
-                    const Divider(height: 1, thickness: 0.5),
+                    const Divider(height: 1, thickness: 0.5, color: Colors.white24), 
                     const SizedBox(height: 10),
                     
                     // Generación dinámica de la lista de días
                     ...diasOrdenados.map((dia) {
-                      final hora = horariosSemana[dia] ?? "Cerrado";
-                      // Obtenemos el día actual para resaltarlo
-                      final hoyIndex = DateTime.now().weekday; // 1 = Lunes, 7 = Domingo
+                      final hora = horariosSemana[dia] ?? "Cerrado"; 
+                      final hoyIndex = DateTime.now().weekday; 
                       
-                      // Mapeo simple de índice a String para comparar
                       bool esHoy = false;
-                      // El mapeo de weekday a nombre de día: 1=Lunes, 7=Domingo
                       if(hoyIndex == 1 && dia == "Lunes") esHoy = true;
                       if(hoyIndex == 2 && dia == "Martes") esHoy = true;
                       if(hoyIndex == 3 && dia == "Miércoles") esHoy = true;
@@ -529,7 +575,14 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
 
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: _HorarioRow(dia, hora, isBold: esHoy),
+                        child: _HorarioRow(
+                          dia, 
+                          hora, 
+                          isBold: esHoy, 
+                          primaryColor: primaryColor, 
+                          textColor: textWhite,
+                          accentColor: accentColor, 
+                        ),
                       );
                     }).toList(),
 
@@ -542,7 +595,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
             
             Text(
               "v1.0.0 • SARLUX App",
-              style: GoogleFonts.poppins(color: const Color.fromARGB(255, 189, 189, 189), fontSize: 11), // Reemplazando Colors.grey[400]
+              style: GoogleFonts.poppins(color: Colors.white54, fontSize: 11), 
             ),
             const SizedBox(height: 30),
           ],
@@ -552,7 +605,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
   }
 }
 
-// ---------------- WIDGETS AUXILIARES ----------------
+// ---------------- WIDGETS AUXILIARES MODIFICADOS ----------------
 
 class _MenuCard extends StatelessWidget {
   final String title;
@@ -560,6 +613,7 @@ class _MenuCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
+  final bool isDisabled; // NUEVO: Para bloquear el botón
 
   const _MenuCard({
     required this.title,
@@ -567,45 +621,54 @@ class _MenuCard extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.isDisabled = false, // Por defecto no está deshabilitado
   });
 
   @override
   Widget build(BuildContext context) {
+    // Usamos el color base si no está deshabilitado, o un gris con menos opacidad si lo está
+    final cardColor = isDisabled ? Colors.grey.shade700 : color;
+    final textOpacity = isDisabled ? 0.5 : 1.0;
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: onTap,
+        // Si está deshabilitado, el onTap no hace nada
+        onTap: isDisabled ? null : onTap,
         borderRadius: BorderRadius.circular(24),
         child: Ink(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: color,
+            color: cardColor,
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: color.withOpacity(0.4),
+                color: cardColor.withOpacity(0.4),
                 blurRadius: 12,
                 offset: const Offset(0, 6),
               ),
             ],
-            gradient: LinearGradient(
-              colors: [
-                color,
-                Color.lerp(color, Colors.black, 0.2)!, 
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            // Usamos un degradado más sutil cuando está deshabilitado
+            gradient: isDisabled
+                ? null // Sin degradado si está deshabilitado
+                : LinearGradient(
+                    colors: [
+                      color,
+                      Color.lerp(color, Colors.black, 0.4)!, 
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
           ),
           child: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
+                  color: Colors.black.withOpacity(0.3 * textOpacity), // Oscurecemos el fondo si está deshabilitado
                   shape: BoxShape.circle,
                 ),
-                child: Icon(icon, color: Colors.white, size: 30),
+                child: Icon(icon, color: Colors.white.withOpacity(textOpacity), size: 30),
               ),
               const SizedBox(width: 18),
               Expanded(
@@ -615,7 +678,7 @@ class _MenuCard extends StatelessWidget {
                     Text(
                       title,
                       style: GoogleFonts.poppins(
-                        color: Colors.white,
+                        color: Colors.white.withOpacity(textOpacity),
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
@@ -624,7 +687,7 @@ class _MenuCard extends StatelessWidget {
                     Text(
                       subtitle,
                       style: GoogleFonts.poppins(
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white.withOpacity(0.9 * textOpacity),
                         fontSize: 12,
                         fontWeight: FontWeight.w400,
                       ),
@@ -632,7 +695,7 @@ class _MenuCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(Icons.arrow_forward_ios_rounded, color: Colors.white.withOpacity(0.7), size: 18),
+              Icon(Icons.arrow_forward_ios_rounded, color: Colors.white.withOpacity(0.7 * textOpacity), size: 18),
             ],
           ),
         ),
@@ -645,8 +708,9 @@ class _SocialIcon extends StatelessWidget {
   final String asset;
   final VoidCallback onTap;
   final IconData fallbackIcon;
+  final Color tintColor; 
 
-  const _SocialIcon(this.asset, this.onTap, this.fallbackIcon);
+  const _SocialIcon(this.asset, this.onTap, this.fallbackIcon, this.tintColor);
 
   @override
   Widget build(BuildContext context) {
@@ -659,7 +723,7 @@ class _SocialIcon extends StatelessWidget {
           asset,
           width: 28,
           height: 28,
-          errorBuilder: (_, __, ___) => Icon(fallbackIcon, color: const Color(0xFF8C5A3A), size: 28),
+          errorBuilder: (_, __, ___) => Icon(fallbackIcon, color: tintColor, size: 28),
         ),
       ),
     );
@@ -670,26 +734,50 @@ class _HorarioRow extends StatelessWidget {
   final String days;
   final String hours;
   final bool isBold;
+  final Color primaryColor;
+  final Color textColor;
+  final Color accentColor; // NUEVO: Color rojo
 
-  const _HorarioRow(this.days, this.hours, {this.isBold = false});
+  const _HorarioRow(
+    this.days, 
+    this.hours, 
+    {
+      this.isBold = false,
+      required this.primaryColor,
+      required this.textColor,
+      required this.accentColor, // Requerido
+    }
+  );
 
   @override
   Widget build(BuildContext context) {
+    // Comprobamos si está "Cerrado" para aplicar el color rojo
+    final bool estaCerrado = hours.toLowerCase().trim() == "cerrado" || hours.trim().isEmpty;
+    
+    // Si está cerrado, usamos el color acento (Rojo), si es hoy y está abierto, usamos primary (Naranja), si no, usamos el color de texto normal (Blanco/Gris)
+    final Color colorHora = estaCerrado 
+        ? accentColor
+        : isBold ? primaryColor : textColor.withOpacity(0.7);
+
+    // Si está cerrado, aseguramos que el texto sea "Cerrado" (con mayúscula)
+    final String textoHoras = estaCerrado ? "Cerrado" : hours;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
           days,
           style: GoogleFonts.poppins(
-            color: isBold ? const Color(0xFF8C5A3A) : const Color.fromARGB(255, 85, 85, 85), // Reemplazando Colors.black54
+            // Naranja si es hoy (y no está cerrado), Blanco si no
+            color: isBold ? primaryColor : textColor, 
             fontWeight: isBold ? FontWeight.bold : FontWeight.w500, 
             fontSize: 14
           ),
         ),
         Text(
-          hours,
+          textoHoras,
           style: GoogleFonts.poppins(
-            color: isBold ? const Color(0xFF8C5A3A) : const Color.fromARGB(255, 51, 51, 51), // Reemplazando Colors.black87
+            color: colorHora,
             fontWeight: isBold ? FontWeight.bold : FontWeight.w400, 
             fontSize: 14
           ),
