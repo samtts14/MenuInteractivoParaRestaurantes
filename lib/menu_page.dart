@@ -26,7 +26,8 @@ class UniversalMenuPage extends StatefulWidget {
 class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- CONFIGURACIÓN ----------------
   final String endpoint =
-      'https://script.google.com/macros/s/AKfycbyTI-7q5DZJc0_kvpJg5WknTObkY88JVdaYHidu6CFzeiIgJ7pDxPkoa3c85RaCA5hy/exec?table=Productos';
+      'https://script.google.com/macros/s/AKfycbwr-CKWRDD0RLxbvfGnlC12wMnBJfPjwRd72YPuCI9bAZW-uHUFrv-EbqC8UJScgoWi/exec?table=Productos';
+  // REMOVIDO: Se elimina la variable hardcodeada, ahora se toma de widget.telefonoNegocio
 
   // ---------------- ESTADO ----------------
   List<Producto> productos = [];
