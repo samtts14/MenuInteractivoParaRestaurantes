@@ -16,7 +16,7 @@ class CafeteriaApp extends StatelessWidget {
     const secondaryColor = Color(0xFFF2E8DC); 
 
     return MaterialApp(
-      title: 'Menú Migajas Café',
+      title: 'SARV SOLUTIONS',
       debugShowCheckedModeBanner: false,
       
       // TEMA GLOBAL: Aplica colores y fuentes a toda la aplicación automáticamente

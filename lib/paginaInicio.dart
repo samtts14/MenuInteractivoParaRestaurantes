@@ -43,7 +43,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
 
   // ---------------- DATOS DEL NEGOCIO (Estado) ----------------
   // Valores por defecto (se actualizarán con DatosNeg)
-  String nombreNegocio = "SARLUX App"; 
+  String nombreNegocio = "SARV SOLUTIONS"; 
   String urlInstagram = "https://www.instagram.com/migajascafe/";
   String urlMapa = "https://maps.app.goo.gl/g2rA9JGpfewZb35T9";
   String telefonoWhatsapp = "18095550000"; 
@@ -53,7 +53,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
 
   // URL del Script apuntando a la pestaña 'DatosNeg' en el MISMO sheet.
   final String endpointInfo =
-      'https://script.google.com/macros/s/AKfycbyTI-7q5DZJc0_kvpJg5WknTObkY88JVdaYHidu6CFzeiIgJ7pDxPkoa3c85RaCA5hy/exec?table=DatosNeg';
+      'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=DatosNeg';
 
   @override
   void initState() {
@@ -274,7 +274,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
             child: ScaleTransition( 
               scale: _scaleAnimation,
               child: Image.asset(
-                'assets/images/Sarlux_logo.png', 
+                'assets/images/SARVSOLUTIONS_LOGO.png', 
                 width: 150, 
                 height: 150, 
                 fit: BoxFit.contain,
@@ -375,7 +375,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         child: const CircleAvatar(
                           radius: 45,
                           backgroundColor: Colors.white, 
-                          backgroundImage: AssetImage('assets/images/Sarlux_logo.png'),
+                          backgroundImage: AssetImage('assets/images/SARVSOLUTIONS_LOGO.png'),
                           child: null, 
                         ),
                       ),
@@ -594,7 +594,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
             const SizedBox(height: 40),
             
             Text(
-              "v1.0.0 • SARLUX App",
+              "v1.0.0 • SARV SOLUTIONS",
               style: GoogleFonts.poppins(color: Colors.white54, fontSize: 11), 
             ),
             const SizedBox(height: 30),
