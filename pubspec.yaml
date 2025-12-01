@@ -15,11 +15,12 @@ dependencies:
   http: ^1.2.2
   diacritic: ^0.1.6
   
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+  # ¡BORRA LA LÍNEA DE IMAGE_PATH DE AQUÍ!
 
 flutter:
   uses-material-design: true
@@ -28,3 +29,18 @@ flutter:
     - assets/images/whatsapp.png
     - assets/images/instagram.png
     - assets/images/SARVSOLUTIONS_LOGO.png
+
+# =======================================================
+# AGREGA ESTO AL FINAL DEL ARCHIVO (NUEVA SECCIÓN)
+# Asegúrate de que esté pegado totalmente a la izquierda
+# =======================================================
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/SARVSOLUTIONS_LOGO.png"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/images/SARVSOLUTIONS_LOGO.png"
+    background_color: "#ffffff" # Color de fondo al abrir la web en móvil
+    theme_color: "#8C5A3A"      # Color de la barra del navegador
