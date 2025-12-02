@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart'; 
 import 'productos.dart';
 
 // Enum para saber en qué modo estamos
@@ -33,9 +34,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   List<Producto> productosFiltrados = [];
   String categoriaSeleccionada = "Todas";
   bool cargando = true;
-  final Map<Producto, int> carrito = {}; 
   String filtroBusqueda = '';
   final Map<Producto, bool> _justAdded = {}; 
+
+  // CARRITO Y HISTORIAL DE RONDAS
+  final Map<Producto, int> carrito = {}; 
+  List<Map<Producto, int>> historialRondas = []; // Lista de mapas para guardar las rondas pasadas
 
   // Variables para el Carrusel
   final PageController _pageController = PageController(viewportFraction: 0.85);
@@ -48,8 +52,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   final cardColor = const Color(0xFF1E1E1E); // Gris Oscuro (Tarjetas)
   final accentColor = const Color(0xFFE53935); // Rojo (Ofertas/Acentos)
   final textWhite = const Color(0xFFFFFFFF); // Blanco
-  
-  // Usamos el Naranja para el carrito también para mantener la marca
   final cartColor = const Color(0xFFE08D00); 
 
   bool get esDelivery => widget.tipoServicio == TipoServicio.delivery;
@@ -57,7 +59,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   @override
   void initState() {
     super.initState();
-    _cargarDatos();
+    _cargarDatosEstrategiaCache(); 
     
     _pageController.addListener(() {
       int next = _pageController.page?.round() ?? 0;
@@ -91,30 +93,158 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     super.dispose();
   }
 
-  Future<void> _cargarDatos() async {
+  // ---------------- PERSISTENCIA INTELIGENTE (5 HORAS DE VIDA) ----------------
+
+  Future<void> _guardarCarrito() async {
+    final prefs = await SharedPreferences.getInstance();
+    
+    // 1. Convertir Carrito Actual a JSON
+    final Map<String, int> carritoSimple = {};
+    carrito.forEach((p, c) => carritoSimple[p.nombre] = c);
+    
+    // 2. Convertir Historial a JSON
+    final List<Map<String, int>> historialSimple = historialRondas.map((ronda) {
+      final Map<String, int> rondaMap = {};
+      ronda.forEach((p, c) => rondaMap[p.nombre] = c);
+      return rondaMap;
+    }).toList();
+
+    await prefs.setString('carrito_persistente', jsonEncode(carritoSimple));
+    await prefs.setString('historial_persistente', jsonEncode(historialSimple));
+
+    // 3. Gestionar el Tiempo de Vida
+    // Solo guardamos la fecha de inicio si NO existe. Si ya existe, la mantenemos para respetar las 5 horas desde el inicio.
+    if (!prefs.containsKey('hora_inicio_orden')) {
+      await prefs.setString('hora_inicio_orden', DateTime.now().toIso8601String());
+    }
+  }
+
+  Future<void> _restaurarCarrito(List<Producto> productosReferencia) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // --- VERIFICACIÓN DE CADUCIDAD (5 HORAS) ---
+      final String? horaInicioStr = prefs.getString('hora_inicio_orden');
+      
+      if (horaInicioStr != null) {
+        final DateTime horaInicio = DateTime.parse(horaInicioStr);
+        final DateTime ahora = DateTime.now();
+        final Duration diferencia = ahora.difference(horaInicio);
+
+        // Si han pasado más de 5 horas, BORRAMOS TODO
+        if (diferencia.inHours >= 5) {
+          debugPrint("La sesión de 5 horas caducó. Limpiando datos...");
+          await _borrarDatosLocales(prefs);
+          return; // Salimos, no cargamos nada
+        }
+      }
+      // ------------------------------------------
+
+      // 1. Cargar Carrito Actual
+      final String? carritoJson = prefs.getString('carrito_persistente');
+      if (carritoJson != null) {
+        final Map<String, dynamic> datos = jsonDecode(carritoJson);
+        final Map<Producto, int> restaurado = {};
+        datos.forEach((nom, cant) {
+           try {
+             final p = productosReferencia.firstWhere((element) => element.nombre == nom);
+             restaurado[p] = cant as int;
+           } catch (_) {}
+        });
+        if (mounted) setState(() { carrito.clear(); carrito.addAll(restaurado); });
+      }
+
+      // 2. Cargar Historial
+      final String? historialJson = prefs.getString('historial_persistente');
+      if (historialJson != null) {
+        final List<dynamic> listaRondas = jsonDecode(historialJson);
+        final List<Map<Producto, int>> historialRestaurado = [];
+
+        for (var ronda in listaRondas) {
+          final Map<String, dynamic> rondaMap = ronda;
+          final Map<Producto, int> rondaObj = {};
+          rondaMap.forEach((nom, cant) {
+            try {
+              final p = productosReferencia.firstWhere((element) => element.nombre == nom);
+              rondaObj[p] = cant as int;
+            } catch (_) {}
+          });
+          if (rondaObj.isNotEmpty) historialRestaurado.add(rondaObj);
+        }
+        if (mounted) setState(() => historialRondas = historialRestaurado);
+      }
+    } catch (e) {
+      debugPrint("Error restaurando: $e");
+    }
+  }
+
+  Future<void> _borrarDatosLocales(SharedPreferences prefs) async {
+    await prefs.remove('carrito_persistente');
+    await prefs.remove('historial_persistente');
+    await prefs.remove('hora_inicio_orden');
+    if (mounted) {
+      setState(() {
+        carrito.clear();
+        historialRondas.clear();
+      });
+    }
+  }
+
+  // ---------------- CARGA DE DATOS (CACHE PRIMERO) ----------------
+  Future<void> _cargarDatosEstrategiaCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    const String keyMenu = 'menu_cache_v1';
+
+    // A) CARGA RÁPIDA
+    final String? jsonCache = prefs.getString(keyMenu);
+    if (jsonCache != null) {
+      try {
+        final List<dynamic> data = jsonDecode(jsonCache);
+        final List<Producto> listaCache = _parsearProductos(data);
+        
+        if (mounted) {
+          setState(() {
+            productos = listaCache;
+            _aplicarFiltros();
+            cargando = false; 
+          });
+          _restaurarCarrito(listaCache);
+        }
+      } catch (e) {
+        debugPrint("Error leyendo caché: $e");
+      }
+    }
+
+    // B) CARGA SILENCIOSA (INTERNET)
     try {
       final response = await http.get(Uri.parse(endpoint));
       if (response.statusCode == 200) {
+        await prefs.setString(keyMenu, response.body);
         final List<dynamic> data = jsonDecode(response.body);
-        final List<Producto> parsed = data
-            .map((e) => Producto.fromJson(e))
-            .where((p) =>
-                p.nombre.isNotEmpty && p.estado.toLowerCase() == 'disponible')
-            .toList();
+        final List<Producto> listaFresca = _parsearProductos(data);
 
         if (mounted) {
           setState(() {
-            productos = parsed;
+            productos = listaFresca;
             _aplicarFiltros();
             cargando = false;
           });
+          _restaurarCarrito(listaFresca); 
         }
       }
     } catch (e) {
-      if (mounted) setState(() => cargando = false);
-      debugPrint("Error cargando productos: $e");
+      if (mounted && productos.isEmpty) setState(() => cargando = false);
     }
   }
+
+  List<Producto> _parsearProductos(List<dynamic> jsonList) {
+    return jsonList
+        .map((e) => Producto.fromJson(e))
+        .where((p) => p.nombre.isNotEmpty && p.estado.toLowerCase() == 'disponible')
+        .toList();
+  }
+
+  // ---------------- LÓGICA DE NEGOCIO ----------------
 
   void _aplicarFiltros() {
     String norm(String s) => s.toLowerCase();
@@ -170,6 +300,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           carrito.remove(p);
         }
       }
+      _guardarCarrito(); 
     });
   }
 
@@ -180,6 +311,15 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
 
   double get totalCarrito =>
       carrito.entries.fold(0.0, (s, e) => s + (getPrice(e.key) * e.value));
+  
+  // Total que suma el carrito actual + todas las rondas anteriores
+  double get totalGeneral {
+    double total = totalCarrito;
+    for (var ronda in historialRondas) {
+      total += ronda.entries.fold(0.0, (s, e) => s + (getPrice(e.key) * e.value));
+    }
+    return total;
+  }
 
   void enviarPedidoWhatsApp() async {
     String titulo = esDelivery ? "🛵 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
@@ -196,15 +336,23 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         "https://wa.me/${widget.telefonoNegocio}?text=${Uri.encodeComponent(mensaje)}");
     
     try {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
+        if (await canLaunchUrl(url)) {
+          await launchUrl(url, mode: LaunchMode.externalApplication);
+           if (mounted) {
+             final prefs = await SharedPreferences.getInstance();
+             await _borrarDatosLocales(prefs); // En delivery se borra todo al enviar
+             Navigator.pop(context);
+             ScaffoldMessenger.of(context).showSnackBar(
+               SnackBar(content: Text("Pedido Enviado", style: GoogleFonts.poppins()), backgroundColor: Colors.green)
+             );
+          }
+        }
     } catch (e) {
-       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("No se pudo abrir WhatsApp")));
-      }
+       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Error al abrir WhatsApp")));
     }
   }
 
+  // ---------------- UI BUILD ----------------
   @override
   Widget build(BuildContext context) {
     final Set<String> cats = productos.map((p) => p.categoria).toSet();
@@ -214,40 +362,41 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     final bool mostrarCarrusel = ofertas.isNotEmpty && (categoriaSeleccionada == "Todas" || categoriaSeleccionada == "Ofertas") && filtroBusqueda.isEmpty;
 
     return Scaffold(
-      backgroundColor: secondaryColor, // FONDO NEGRO
+      backgroundColor: secondaryColor,
       appBar: AppBar(
-        backgroundColor: secondaryColor, // AppBar Negro
+        backgroundColor: secondaryColor,
         elevation: 0,
         scrolledUnderElevation: 2,
-        iconTheme: IconThemeData(color: textWhite), // Icono de atrás blanco
+        iconTheme: IconThemeData(color: textWhite),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
           esDelivery ? 'Menú Delivery' : 'Menú Restaurante',
-          style: GoogleFonts.poppins(
-            color: primaryColor, // Título Naranja
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-          ),
+          style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         centerTitle: true,
         actions: [
-          if (carrito.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 16.0),
-              child: Center(
-                child: GestureDetector(
-                  onTap: () => mostrarCarritoModal(context),
-                  child: Badge(
-                    backgroundColor: accentColor, // Badge Rojo
-                    label: Text('${carrito.values.fold(0, (a, b) => a + b)}', style: const TextStyle(color: Colors.white)),
-                    child: Icon(Icons.shopping_cart, color: primaryColor), // Carrito Naranja
-                  ),
+          // Icono Carrito Flotante (AppBar)
+          Padding(
+            padding: const EdgeInsets.only(right: 16.0),
+            child: Center(
+              child: GestureDetector(
+                onTap: () {
+                   if (carrito.isNotEmpty || historialRondas.isNotEmpty) {
+                     mostrarCarritoModal(context);
+                   }
+                },
+                child: Badge(
+                  backgroundColor: accentColor,
+                  isLabelVisible: carrito.isNotEmpty || historialRondas.isNotEmpty,
+                  label: Text('${carrito.values.fold(0, (a, b) => a + b)}', style: const TextStyle(color: Colors.white)),
+                  child: Icon(Icons.shopping_cart, color: (carrito.isNotEmpty || historialRondas.isNotEmpty) ? primaryColor : Colors.grey),
                 ),
               ),
-            )
+            ),
+          )
         ],
       ),
       body: Stack(
@@ -257,22 +406,19 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
               // 1. BUSCADOR
               SliverToBoxAdapter(
                 child: Container(
-                  color: secondaryColor, // Fondo Negro
+                  color: secondaryColor,
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: TextField(
                     onChanged: filtrarPorTexto,
-                    style: GoogleFonts.poppins(color: textWhite), // Texto al escribir blanco
+                    style: GoogleFonts.poppins(color: textWhite),
                     decoration: InputDecoration(
                       hintText: '¿Qué se te antoja hoy?',
                       hintStyle: GoogleFonts.poppins(color: Colors.grey[600]), 
-                      prefixIcon: Icon(Icons.search, color: primaryColor), // Lupa Naranja
+                      prefixIcon: Icon(Icons.search, color: primaryColor),
                       filled: true,
-                      fillColor: cardColor, // Input Gris Oscuro
+                      fillColor: cardColor,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(30),
-                        borderSide: BorderSide.none,
-                      ),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
                     ),
                   ),
                 ),
@@ -282,7 +428,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
               SliverToBoxAdapter(
                 child: Container(
                   height: 60, 
-                  color: secondaryColor, // Fondo Negro
+                  color: secondaryColor,
                   child: !cargando 
                     ? ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -298,18 +444,18 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                               duration: const Duration(milliseconds: 200),
                               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                               decoration: BoxDecoration(
-                                color: isSelected ? primaryColor : cardColor, // Naranja o Gris Oscuro
+                                color: isSelected ? primaryColor : cardColor,
                                 borderRadius: BorderRadius.circular(25),
                                 boxShadow: isSelected 
                                   ? [BoxShadow(color: primaryColor.withOpacity(0.3), blurRadius: 6, offset: const Offset(0, 3))]
                                   : [],
-                                border: isSelected ? null : Border.all(color: Colors.white12), // Borde sutil si no está seleccionado
+                                border: isSelected ? null : Border.all(color: Colors.white12),
                               ),
                               child: Center(
                                 child: Text(
                                   cat,
                                   style: GoogleFonts.poppins(
-                                    color: isSelected ? Colors.black : Colors.white70, // Texto negro sobre naranja, blanco sobre gris
+                                    color: isSelected ? Colors.black : Colors.white70,
                                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                                     fontSize: 13,
                                   ),
@@ -333,7 +479,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       children: [
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 20),
-                          child: Text("🔥 Destacados", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor)), // Rojo Fuego
+                          child: Text("🔥 Destacados", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor)),
                         ),
                         const SizedBox(height: 10),
                         SizedBox(
@@ -350,19 +496,18 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     ),
                   ),
                 ),
+              
               // 4. TÍTULO DE LISTA
-                if (!cargando)
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                    sliver: SliverToBoxAdapter(
-                      child: Text(
-                        filtroBusqueda.isNotEmpty 
-                            ? "Resultados" 
-                            : "Nuestro Menú :: ${categoriaSeleccionada}", // Muestra la categoría seleccionada
-                        style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: primaryColor), // Naranja
-                      ),
+              if (!cargando)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  sliver: SliverToBoxAdapter(
+                    child: Text(
+                      filtroBusqueda.isNotEmpty ? "Resultados" : "Nuestro Menú :: $categoriaSeleccionada",
+                      style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: primaryColor),
                     ),
                   ),
+                ),
 
               // 5. LISTA DE PRODUCTOS
               cargando 
@@ -373,7 +518,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             ],
           ),
 
-          // 6. BARRA FLOTANTE DEL CARRITO
+          // 6. BARRA FLOTANTE DEL CARRITO (Solo si hay items activos)
           if (carrito.isNotEmpty)
             Positioned(
               bottom: 20,
@@ -384,7 +529,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   decoration: BoxDecoration(
-                    color: cartColor, // Naranja
+                    color: cartColor,
                     borderRadius: BorderRadius.circular(30), 
                     boxShadow: [
                       BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 15, offset: const Offset(0, 8))
@@ -395,7 +540,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.2), // Oscurecer un poco sobre el naranja
+                          color: Colors.black.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(15)
                         ),
                         child: Text(
@@ -425,7 +570,286 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- WIDGET: Ítem del Carrusel ---
+  // --- MODAL DE CARRITO (LÓGICA DE RONDAS) ---
+  void mostrarCarritoModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (c) => StatefulBuilder(
+        builder: (context, setModalState) {
+          final currentEntries = carrito.entries.toList();
+
+          // LÓGICA: CERRAR RONDA (Mover al historial)
+          void cerrarRonda() {
+            if (carrito.isEmpty) return;
+            setState(() {
+              historialRondas.add(Map.from(carrito)); // Mover a historial
+              carrito.clear(); // Limpiar activo
+            });
+            _guardarCarrito();
+            setModalState((){});
+            
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("Ronda guardada. Puedes pedir lo siguiente.", style: GoogleFonts.poppins()),
+                backgroundColor: Colors.green,
+                behavior: SnackBarBehavior.floating,
+              )
+            );
+          }
+
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.85,
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(height: 15),
+                Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(10))),
+                
+                // CABECERA CON HISTORIAL
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("Tu Pedido", style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: textWhite)),
+                          if (!esDelivery)
+                            Text("Ronda Actual #${historialRondas.length + 1}", style: GoogleFonts.poppins(fontSize: 12, color: primaryColor)),
+                        ],
+                      ),
+                      
+                      // BOTÓN VER CUENTA COMPLETA (Icono de Recibo)
+                      if (!esDelivery && historialRondas.isNotEmpty)
+                        IconButton(
+                          onPressed: () => _mostrarHistorialCompleto(context),
+                          icon: const Icon(Icons.receipt_long_rounded, color: Colors.white),
+                          tooltip: "Ver cuenta completa",
+                          style: IconButton.styleFrom(backgroundColor: Colors.white10),
+                        )
+                    ],
+                  ),
+                ),
+
+                // LISTA ACTUAL
+                Expanded(
+                  child: currentEntries.isEmpty
+                      ? Center(child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.room_service_outlined, size: 80, color: Colors.white10),
+                            const SizedBox(height: 10),
+                            Text("Listo para la siguiente ronda", style: GoogleFonts.poppins(color: Colors.grey[500], fontSize: 16)),
+                            if (historialRondas.isNotEmpty)
+                               Text("Tienes ${historialRondas.length} rondas anteriores guardadas.", style: GoogleFonts.poppins(color: primaryColor, fontSize: 12)),
+                          ],
+                        ))
+                      : ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          itemCount: currentEntries.length, 
+                          separatorBuilder: (_,__) => Divider(height: 30, color: Colors.white10),
+                          itemBuilder: (context, index) {
+                            final entry = currentEntries[index];
+                            final p = entry.key;
+                            final cant = carrito[p] ?? 0; 
+                            if (cant == 0) return const SizedBox.shrink();
+
+                            return Row(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.network(p.imagen, width: 60, height: 60, fit: BoxFit.cover, cacheWidth: 120),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(p.nombre, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15, color: textWhite)),
+                                      Text("RD\$${getPrice(p).toStringAsFixed(0)}", style: GoogleFonts.poppins(color: primaryColor, fontSize: 13)),
+                                    ],
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    _btnCant(Icons.remove, cant == 1 ? Colors.red.withOpacity(0.2) : Colors.white10, cant == 1 ? Colors.red : Colors.white, () {
+                                        gestionarCarrito(p, false);
+                                        setModalState((){}); setState((){}); 
+                                        if (carrito.isEmpty && historialRondas.isEmpty) Navigator.pop(context); 
+                                      }
+                                    ),
+                                    SizedBox(width: 30, child: Center(child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: textWhite)))),
+                                    _btnCant(Icons.add, primaryColor.withOpacity(0.2), primaryColor, () {
+                                        gestionarCarrito(p, true);
+                                        setModalState((){}); setState((){});
+                                      }
+                                    ),
+                                  ],
+                                )
+                              ],
+                            );
+                          },
+                        ),
+                ),
+
+                // ZONA INFERIOR
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: secondaryColor,
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, -5))]
+                  ),
+                  child: SafeArea(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text("Total Ronda", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: textWhite)),
+                            Text("RD\$${totalCarrito.toStringAsFixed(2)}", style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: primaryColor)),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+
+                        if (esDelivery)
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: accentColor, 
+                                padding: const EdgeInsets.symmetric(vertical: 18),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                elevation: 0,
+                              ),
+                              onPressed: carrito.isNotEmpty ? enviarPedidoWhatsApp : null,
+                              child: Text("Confirmar Delivery 🛵", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            ),
+                          )
+                        else
+                          // MODO RESTAURANTE - Botón "Nueva Ronda"
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12)),
+                                child: const Icon(Icons.visibility, color: Colors.white70),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text("Muestra al mesero", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 14)),
+                              ),
+                              if (carrito.isNotEmpty)
+                                TextButton.icon(
+                                  onPressed: cerrarRonda, // Guarda ronda
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: primaryColor,
+                                    backgroundColor: primaryColor.withOpacity(0.1),
+                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+                                  ),
+                                  icon: const Icon(Icons.add_circle_outline, size: 20),
+                                  label: Text("Nueva Ronda", style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                                )
+                            ],
+                          )
+                      ],
+                    ),
+                  ),
+                )
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // --- MODAL DE HISTORIAL COMPLETO (RECIBO) ---
+  void _mostrarHistorialCompleto(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardColor,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.receipt_long, color: Colors.white),
+            const SizedBox(width: 10),
+            Text("Cuenta Completa", style: GoogleFonts.poppins(color: textWhite, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 1. Mostrar Rondas Anteriores
+                for (int i = 0; i < historialRondas.length; i++) ...[
+                  Text("Ronda #${i + 1}", style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.bold)),
+                  const Divider(color: Colors.white24),
+                  ...historialRondas[i].entries.map((e) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(child: Text("${e.key.nombre} x${e.value}", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13))),
+                        Text("RD\$${(getPrice(e.key) * e.value).toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13)),
+                      ],
+                    ),
+                  )),
+                  const SizedBox(height: 15),
+                ],
+
+                // 2. Mostrar Ronda Actual (si hay algo)
+                if (carrito.isNotEmpty) ...[
+                  Text("Ronda Actual (Sin cerrar)", style: GoogleFonts.poppins(color: accentColor, fontWeight: FontWeight.bold)),
+                  const Divider(color: Colors.white24),
+                  ...carrito.entries.map((e) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(child: Text("${e.key.nombre} x${e.value}", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13))),
+                        Text("RD\$${(getPrice(e.key) * e.value).toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13)),
+                      ],
+                    ),
+                  )),
+                ],
+                
+                const Divider(color: Colors.white, thickness: 1, height: 30),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text("TOTAL A PAGAR:", style: GoogleFonts.poppins(color: textWhite, fontWeight: FontWeight.bold, fontSize: 16)),
+                    Text("RD\$${totalGeneral.toStringAsFixed(2)}", style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18)),
+                  ],
+                )
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primaryColor, shape: const StadiumBorder()),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Volver", style: TextStyle(color: Colors.black)),
+          )
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGETS AUXILIARES ---
+
   Widget _buildCarouselItem(Producto p) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8),
@@ -444,6 +868,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             Image.network(
               p.imagen,
               fit: BoxFit.cover,
+              cacheWidth: 400, 
               errorBuilder: (_,__,___) => Container(
                 color: cardColor, 
                 child: Center(
@@ -451,7 +876,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                 ),
               ),
             ),
-            // Degradado para leer texto
             Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -462,7 +886,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                 ),
               ),
             ),
-            // Info
             Positioned(
               bottom: 15,
               left: 15,
@@ -477,7 +900,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     children: [
                       Text(
                         "RD\$${getPrice(p).toStringAsFixed(0)}", 
-                        style: GoogleFonts.poppins(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold), // Precio Naranja
+                        style: GoogleFonts.poppins(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold),
                       ),
                       Container(
                         padding: const EdgeInsets.all(8),
@@ -494,7 +917,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
               right: 15,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(color: accentColor, borderRadius: BorderRadius.circular(20)), // Etiqueta Roja
+                decoration: BoxDecoration(color: accentColor, borderRadius: BorderRadius.circular(20)),
                 child: Text("OFERTA", style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
               ),
             ),
@@ -504,7 +927,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- WIDGET: Lista Sliver ---
   Widget _buildProductListSliver(List<Producto> lista) {
     if (lista.isEmpty) {
       return SliverToBoxAdapter(
@@ -530,7 +952,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- WIDGET: TARJETA DE PRODUCTO (OSCURA) ---
   Widget _buildProductoCard(Producto p) {
     final bool isOferta = p.enOferta && p.precioOferta != null && p.precioOferta! > 0;
     final bool isJustAdded = _justAdded[p] ?? false;
@@ -538,12 +959,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: cardColor, // Tarjeta Gris Oscuro
+        color: cardColor,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))
         ],
-        border: Border.all(color: Colors.white.withOpacity(0.05)), // Borde muy sutil
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
       child: Material(
         color: Colors.transparent,
@@ -564,7 +985,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       width: 100,
                       height: 100,
                       fit: BoxFit.cover,
-                      cacheWidth: 250, 
+                      cacheWidth: 200, 
                       errorBuilder: (_,__,___) => Container(
                         width: 100, height: 100, color: Colors.black26,
                         child: Icon(Icons.fastfood, color: Colors.grey[700]),
@@ -601,24 +1022,21 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             children: [
                               Text(
                                 isOferta ? "RD\$${p.precioOferta!.toStringAsFixed(0)}" : "RD\$${p.precio.toStringAsFixed(0)}",
-                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: primaryColor), // Precio Naranja
+                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: primaryColor),
                               ),
                               if (isOferta)
                                 Text(
                                   "RD\$${p.precio.toStringAsFixed(0)}",
-                                  // --- CAMBIO AQUI ---
                                   style: GoogleFonts.poppins(
-                                      decoration: TextDecoration.lineThrough,
-                                      decorationColor: accentColor, // <--- COLOR ROJO EN EL TACHADO
-                                      decorationThickness: 2.0,     // <--- GROSOR DE LA LÍNEA
-                                      fontSize: 11,
-                                      color: Colors.grey[600]
+                                    decoration: TextDecoration.lineThrough,
+                                    decorationColor: accentColor,
+                                    decorationThickness: 2.0,
+                                    fontSize: 11,
+                                    color: Colors.grey[600]
                                   ),
-                                  // -------------------
                                 ),
                             ],
                           ),
-                          // Botón Agregar
                           Material( 
                             color: Colors.transparent,
                             child: InkWell(
@@ -628,13 +1046,13 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                 duration: const Duration(milliseconds: 300),
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: isJustAdded ? primaryColor : Colors.white.withOpacity(0.05), // Botón inactivo es gris casi transparente
+                                  color: isJustAdded ? primaryColor : Colors.white.withOpacity(0.05),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Icon(
                                   isJustAdded ? Icons.check_rounded : Icons.add_rounded, 
                                   size: 24, 
-                                  color: isJustAdded ? Colors.black : primaryColor // Icono Naranja
+                                  color: isJustAdded ? Colors.black : primaryColor
                                 ),
                               ),
                             ),
@@ -652,7 +1070,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- SKELETONS PARA CARGA (OSCUROS) ---
   Widget _buildSkeletonChips() {
     return ListView.builder(
       scrollDirection: Axis.horizontal,
@@ -702,7 +1119,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- MODAL DETALLES DEL PRODUCTO (OSCURO) ---
   void _showProductDetails(Producto p) {
     final bool isOferta = p.enOferta && p.precioOferta != null && p.precioOferta! > 0;
     
@@ -714,7 +1130,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         return Container(
           height: MediaQuery.of(context).size.height * 0.9, 
           decoration: BoxDecoration(
-            color: cardColor, // Fondo Modal Gris Oscuro
+            color: cardColor,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
           ),
           child: Column(
@@ -729,7 +1145,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // IMAGEN
                       Hero(
                         tag: p.nombre + (isOferta ? 'list' : ''), 
                         child: ClipRRect(
@@ -739,6 +1154,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             height: 250,
                             width: double.infinity,
                             fit: BoxFit.cover,
+                            cacheWidth: 600, 
                             errorBuilder: (_,__,___) => Container(
                               height: 250,
                               color: Colors.black26,
@@ -748,7 +1164,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                         ),
                       ),
                       
-                      // DETALLES DEL TEXTO
                       Padding(
                         padding: const EdgeInsets.all(24),
                         child: Column(
@@ -772,7 +1187,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             const SizedBox(height: 30),
                             Text(
                               "Ingredientes / Notas de Sabor:",
-                              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor), // Rojo
+                              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor),
                             ),
                             const SizedBox(height: 8),
                             Text(
@@ -787,11 +1202,10 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                 ),
               ),
 
-              // BARRA INFERIOR (OSCURA)
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: secondaryColor, // Fondo Negro
+                  color: secondaryColor,
                   boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, -5))]
                 ),
                 child: SafeArea(
@@ -809,22 +1223,20 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             children: [
                               Text(
                                 "RD\$${getPrice(p).toStringAsFixed(2)}",
-                                style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: primaryColor), // Naranja
+                                style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: primaryColor),
                               ),
                               if (isOferta)
                                 Padding(
                                   padding: const EdgeInsets.only(left: 8.0),
                                   child: Text(
                                     "RD\$${p.precio.toStringAsFixed(0)}",
-                                    // --- CAMBIO AQUI ---
                                     style: GoogleFonts.poppins(
                                       decoration: TextDecoration.lineThrough,
-                                      decorationColor: accentColor, // <--- COLOR ROJO
-                                      decorationThickness: 2.0,     // <--- GROSOR
+                                      decorationColor: accentColor,
+                                      decorationThickness: 2.0,
                                       fontSize: 16,
                                       color: Colors.grey[600],
                                     ),
-                                    // -------------------
                                   ),
                                 ),
                             ],
@@ -832,7 +1244,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                         ],
                       ),
                       
-                      // Botón Añadir Modal
                       SizedBox(
                         width: 180,
                         child: ElevatedButton.icon(
@@ -840,13 +1251,13 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             gestionarCarrito(p, true);
                             Navigator.pop(context); 
                           },
-                          icon: const Icon(Icons.add_shopping_cart, color: Colors.black), // Icono Negro
+                          icon: const Icon(Icons.add_shopping_cart, color: Colors.black),
                           label: Text(
                             "Añadir",
-                            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black), // Texto Negro para contraste con Naranja
+                            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black),
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: primaryColor, // Naranja
+                            backgroundColor: primaryColor,
                             padding: const EdgeInsets.symmetric(vertical: 15),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                             elevation: 5,
@@ -861,174 +1272,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           ),
         );
       },
-    );
-  }
-
-  // --- MODAL CARRITO (OSCURO) ---
-  void mostrarCarritoModal(BuildContext context) {
-    final carritoEntries = carrito.entries.toList();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (c) => StatefulBuilder(
-        builder: (context, setModalState) {
-          final currentEntries = carrito.entries.toList();
-
-          return Container(
-            height: MediaQuery.of(context).size.height * 0.85,
-            decoration: BoxDecoration(
-              color: cardColor, // Fondo Modal Gris Oscuro
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
-            ),
-            child: Column(
-              children: [
-                const SizedBox(height: 15),
-                Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(10))),
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("Tu Pedido", style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: textWhite)),
-                      IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, size: 28, color: textWhite))
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: currentEntries.isEmpty
-                      ? Center(child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.shopping_basket_outlined, size: 80, color: Colors.white10),
-                            const SizedBox(height: 10),
-                            Text("Tu carrito está vacío 😔", style: GoogleFonts.poppins(color: Colors.grey[500])),
-                          ],
-                        ))
-                      : ListView.separated(
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          itemCount: currentEntries.length, 
-                          separatorBuilder: (_,__) => Divider(height: 30, color: Colors.white10),
-                          itemBuilder: (context, index) {
-                            final entry = currentEntries[index];
-                            final p = entry.key;
-                            final cant = carrito[p] ?? 0; 
-
-                            if (cant == 0) return const SizedBox.shrink();
-
-                            return Row(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.network(p.imagen, width: 60, height: 60, fit: BoxFit.cover, cacheWidth: 120),
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(p.nombre, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15, color: textWhite)),
-                                      Text("RD\$${getPrice(p).toStringAsFixed(0)}", style: GoogleFonts.poppins(color: primaryColor, fontSize: 13)),
-                                    ],
-                                  ),
-                                ),
-                                Row(
-                                  children: [
-                                    _btnCant(
-                                      Icons.remove, 
-                                      cant == 1 ? Colors.red.withOpacity(0.2) : Colors.white10,
-                                      cant == 1 ? Colors.red : Colors.white, 
-                                      () {
-                                        gestionarCarrito(p, false);
-                                        setModalState((){}); 
-                                        setState((){}); 
-                                        if (carrito.isEmpty) Navigator.pop(context); 
-                                      }
-                                    ),
-                                    SizedBox(
-                                      width: 30, 
-                                      child: Center(
-                                        child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: textWhite))
-                                      )
-                                    ),
-                                    _btnCant(
-                                      Icons.add, 
-                                      primaryColor.withOpacity(0.2), // Fondo Naranja suave
-                                      primaryColor, // Icono Naranja
-                                      () {
-                                        gestionarCarrito(p, true);
-                                        setModalState((){});
-                                        setState((){});
-                                      }
-                                    ),
-                                  ],
-                                )
-                              ],
-                            );
-                          },
-                        ),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: secondaryColor, // Fondo Negro
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, -5))]
-                  ),
-                  child: SafeArea(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text("Total", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: textWhite)),
-                            Text("RD\$${totalCarrito.toStringAsFixed(2)}", style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: primaryColor)),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        if (esDelivery)
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: accentColor, // Botón Confirmar ROJO
-                                padding: const EdgeInsets.symmetric(vertical: 18),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                elevation: 0,
-                              ),
-                              onPressed: carrito.isNotEmpty ? enviarPedidoWhatsApp : null,
-                              child: Text(
-                                "Confirmar Delivery 🛵",
-                                style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                              ),
-                            ),
-                          )
-                        else
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8.0),
-                            child: Row(
-                              children: [
-                                Icon(Icons.info_outline, color: primaryColor, size: 20),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    "Un mesero tomará tu orden en breve.",
-                                    style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[500]),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                )
-              ],
-            ),
-          );
-        },
-      ),
     );
   }
 
