@@ -7,17 +7,20 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart'; 
 import 'productos.dart';
 
-// Enum para saber en qué modo estamos
+// Enum para saber en qu\u00e9 modo estamos
 enum TipoServicio { restaurante, delivery }
 
 class UniversalMenuPage extends StatefulWidget {
   final TipoServicio tipoServicio;
   final String telefonoNegocio;
+  // PROPIEDAD AGREGADA: Recibe el estado de si el negocio est\u00e1 abierto hoy.
+  final bool estaAbierto; 
 
   const UniversalMenuPage({
     super.key, 
     required this.tipoServicio,
-    required this.telefonoNegocio, 
+    required this.telefonoNegocio,
+    required this.estaAbierto, // A\u00d1ADIDO AL CONSTRUCTOR
   });
 
   @override
@@ -25,7 +28,7 @@ class UniversalMenuPage extends StatefulWidget {
 }
 
 class _UniversalMenuPageState extends State<UniversalMenuPage> {
-  // ---------------- CONFIGURACIÓN ----------------
+  // ---------------- CONFIGURACI\u00d3N ----------------
   final String endpoint =
       'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=Productos';
   
@@ -55,11 +58,15 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   final cartColor = const Color(0xFFE08D00); 
 
   bool get esDelivery => widget.tipoServicio == TipoServicio.delivery;
+  // Acceso al estado de apertura
+  bool get estaAbierto => widget.estaAbierto; 
+  bool get estaCerrado => !widget.estaAbierto; 
+
 
   @override
   void initState() {
     super.initState();
-    _cargarDatosEstrategiaCache(); 
+    _cargarProductos(); // Carga directa del men\u00fa (sin cach\u00e9 de productos para velocidad)
     
     _pageController.addListener(() {
       int next = _pageController.page?.round() ?? 0;
@@ -93,7 +100,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     super.dispose();
   }
 
-  // ---------------- PERSISTENCIA INTELIGENTE (5 HORAS DE VIDA) ----------------
+  // ---------------- PERSISTENCIA INTELIGENTE (CARRITO SI, MEN\u00da NO) ----------------
+  // Mantenemos SharedPreferences SOLO para el carrito y el historial, para que no se pierda al refrescar.
 
   Future<void> _guardarCarrito() async {
     final prefs = await SharedPreferences.getInstance();
@@ -112,8 +120,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     await prefs.setString('carrito_persistente', jsonEncode(carritoSimple));
     await prefs.setString('historial_persistente', jsonEncode(historialSimple));
 
-    // 3. Gestionar el Tiempo de Vida
-    // Solo guardamos la fecha de inicio si NO existe. Si ya existe, la mantenemos para respetar las 5 horas desde el inicio.
+    // 3. Gestionar el Tiempo de Vida (5 HORAS)
+    // Guardamos la hora de inicio solo si es la primera vez que se guarda algo.
     if (!prefs.containsKey('hora_inicio_orden')) {
       await prefs.setString('hora_inicio_orden', DateTime.now().toIso8601String());
     }
@@ -123,7 +131,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // --- VERIFICACIÓN DE CADUCIDAD (5 HORAS) ---
+      // --- VERIFICACI\u00d3N DE CADUCIDAD (5 HORAS) ---
       final String? horaInicioStr = prefs.getString('hora_inicio_orden');
       
       if (horaInicioStr != null) {
@@ -131,30 +139,31 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         final DateTime ahora = DateTime.now();
         final Duration diferencia = ahora.difference(horaInicio);
 
-        // Si han pasado más de 5 horas, BORRAMOS TODO
+        // Si han pasado m\u00e1s de 5 horas, BORRAMOS TODO autom\u00e1ticamente
         if (diferencia.inHours >= 5) {
-          debugPrint("La sesión de 5 horas caducó. Limpiando datos...");
+          debugPrint("La sesi\u00f3n de 5 horas caduc\u00f3. Limpiando datos...");
           await _borrarDatosLocales(prefs);
-          return; // Salimos, no cargamos nada
+          return; // Salimos, no restauramos nada
         }
       }
       // ------------------------------------------
 
-      // 1. Cargar Carrito Actual
+      // 1. Cargar Carrito Actual (Si existe y no ha caducado)
       final String? carritoJson = prefs.getString('carrito_persistente');
       if (carritoJson != null) {
         final Map<String, dynamic> datos = jsonDecode(carritoJson);
         final Map<Producto, int> restaurado = {};
         datos.forEach((nom, cant) {
-           try {
-             final p = productosReferencia.firstWhere((element) => element.nombre == nom);
-             restaurado[p] = cant as int;
-           } catch (_) {}
+            try {
+              // Buscamos el producto en la lista reci\u00e9n cargada
+              final p = productosReferencia.firstWhere((element) => element.nombre == nom);
+              restaurado[p] = cant as int;
+            } catch (_) {}
         });
         if (mounted) setState(() { carrito.clear(); carrito.addAll(restaurado); });
       }
 
-      // 2. Cargar Historial
+      // 2. Cargar Historial de Rondas
       final String? historialJson = prefs.getString('historial_persistente');
       if (historialJson != null) {
         final List<dynamic> listaRondas = jsonDecode(historialJson);
@@ -174,7 +183,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         if (mounted) setState(() => historialRondas = historialRestaurado);
       }
     } catch (e) {
-      debugPrint("Error restaurando: $e");
+      debugPrint("Error restaurando carrito: $e");
     }
   }
 
@@ -190,36 +199,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     }
   }
 
-  // ---------------- CARGA DE DATOS (CACHE PRIMERO) ----------------
-  Future<void> _cargarDatosEstrategiaCache() async {
-    final prefs = await SharedPreferences.getInstance();
-    const String keyMenu = 'menu_cache_v1';
-
-    // A) CARGA RÁPIDA
-    final String? jsonCache = prefs.getString(keyMenu);
-    if (jsonCache != null) {
-      try {
-        final List<dynamic> data = jsonDecode(jsonCache);
-        final List<Producto> listaCache = _parsearProductos(data);
-        
-        if (mounted) {
-          setState(() {
-            productos = listaCache;
-            _aplicarFiltros();
-            cargando = false; 
-          });
-          _restaurarCarrito(listaCache);
-        }
-      } catch (e) {
-        debugPrint("Error leyendo caché: $e");
-      }
-    }
-
-    // B) CARGA SILENCIOSA (INTERNET)
+  // ---------------- CARGA DE DATOS (DIRECTA - SIN CACH\u00c9 DE MEN\u00da) ----------------
+  Future<void> _cargarProductos() async {
     try {
+      // Solicitud directa a internet para asegurar datos frescos y evitar cach\u00e9 corrupto
       final response = await http.get(Uri.parse(endpoint));
       if (response.statusCode == 200) {
-        await prefs.setString(keyMenu, response.body);
         final List<dynamic> data = jsonDecode(response.body);
         final List<Producto> listaFresca = _parsearProductos(data);
 
@@ -229,10 +214,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             _aplicarFiltros();
             cargando = false;
           });
+          // Una vez tenemos los productos frescos, restauramos el carrito guardado
           _restaurarCarrito(listaFresca); 
         }
+      } else {
+          if (mounted) setState(() => cargando = false);
       }
     } catch (e) {
+      debugPrint("Error cargando productos: $e");
       if (mounted && productos.isEmpty) setState(() => cargando = false);
     }
   }
@@ -244,7 +233,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         .toList();
   }
 
-  // ---------------- LÓGICA DE NEGOCIO ----------------
+  // ---------------- L\u00d3GICA DE NEGOCIO ----------------
 
   void _aplicarFiltros() {
     String norm(String s) => s.toLowerCase();
@@ -282,6 +271,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   }
 
   void gestionarCarrito(Producto p, bool agregar) {
+    // REGLA: No se puede modificar el carrito si el negocio est\u00e1 cerrado
+    if (estaCerrado) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("El negocio est\u00e1 cerrado, no se pueden a\u00f1adir o eliminar items.", style: GoogleFonts.poppins()), backgroundColor: accentColor)
+      );
+      return;
+    }
+
     setState(() {
       if (agregar) {
         carrito[p] = (carrito[p] ?? 0) + 1;
@@ -300,7 +297,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           carrito.remove(p);
         }
       }
-      _guardarCarrito(); 
+      _guardarCarrito(); // Guardamos cada cambio en el carrito
     });
   }
 
@@ -322,12 +319,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   }
 
   void enviarPedidoWhatsApp() async {
-    String titulo = esDelivery ? "🛵 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
+    if (estaCerrado) return; // Doble chequeo
+
+    String titulo = esDelivery ? "\uD83D\uDEA4 *Pedido Para Delivery*" : "\uD83C\uDF7D\uFE0F *Pedido en Mesa*";
     String mensaje = "$titulo\n\n";
 
     carrito.forEach((p, cant) {
       mensaje +=
-          "• ${p.nombre} x$cant - RD\$${(getPrice(p) * cant).toStringAsFixed(0)}\n";
+          "\u2022 ${p.nombre} x$cant - RD\$${(getPrice(p) * cant).toStringAsFixed(0)}\n";
     });
 
     mensaje += "\n*Total de Orden: RD\$${totalCarrito.toStringAsFixed(2)}*";
@@ -373,7 +372,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          esDelivery ? 'Menú Delivery' : 'Menú Restaurante',
+          esDelivery ? 'Men\u00fa Delivery' : 'Men\u00fa Restaurante',
           style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         centerTitle: true,
@@ -387,7 +386,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                    if (carrito.isNotEmpty || historialRondas.isNotEmpty) {
                      mostrarCarritoModal(context);
                    }
-                },
+                 },
                 child: Badge(
                   backgroundColor: accentColor,
                   isLabelVisible: carrito.isNotEmpty || historialRondas.isNotEmpty,
@@ -403,6 +402,27 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         children: [
           CustomScrollView(
             slivers: [
+              // BARRA DE ADVERTENCIA DE CIERRE (Nueva)
+              if (estaCerrado)
+                SliverToBoxAdapter(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+                    color: accentColor.withOpacity(0.2),
+                    child: Row(
+                      children: [
+                        Icon(Icons.lock_clock, color: accentColor, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            "\u26A0\uFE0F \u00a1CERRADO HOY! No se pueden realizar nuevos pedidos.",
+                            style: GoogleFonts.poppins(color: accentColor, fontSize: 13, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                
               // 1. BUSCADOR
               SliverToBoxAdapter(
                 child: Container(
@@ -412,7 +432,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     onChanged: filtrarPorTexto,
                     style: GoogleFonts.poppins(color: textWhite),
                     decoration: InputDecoration(
-                      hintText: '¿Qué se te antoja hoy?',
+                      hintText: '\u00bfQu\u00e9 se te antoja hoy?',
                       hintStyle: GoogleFonts.poppins(color: Colors.grey[600]), 
                       prefixIcon: Icon(Icons.search, color: primaryColor),
                       filled: true,
@@ -424,7 +444,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                 ),
               ),
 
-              // 2. CHIPS DE CATEGORÍA
+              // 2. CHIPS DE CATEGOR\u00cdA
               SliverToBoxAdapter(
                 child: Container(
                   height: 60, 
@@ -479,7 +499,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       children: [
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 20),
-                          child: Text("🔥 Destacados", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor)),
+                          child: Text("\uD83D\uDD25 Destacados", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: accentColor)),
                         ),
                         const SizedBox(height: 10),
                         SizedBox(
@@ -497,13 +517,13 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   ),
                 ),
               
-              // 4. TÍTULO DE LISTA
+              // 4. T\u00cdTULO DE LISTA
               if (!cargando)
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                  sliver: SliverToBoxAdapter(
+                  sliver: SliverToBoxAdapter( // CORREGIDO: 'slivers' cambiado a 'sliver'
                     child: Text(
-                      filtroBusqueda.isNotEmpty ? "Resultados" : "Nuestro Menú :: $categoriaSeleccionada",
+                      filtroBusqueda.isNotEmpty ? "Resultados" : "Nuestro Men\u00fa :: $categoriaSeleccionada",
                       style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: primaryColor),
                     ),
                   ),
@@ -570,8 +590,10 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- MODAL DE CARRITO (LÓGICA DE RONDAS) ---
+  // --- MODAL DE CARRITO (L\u00d3GICA DE RONDAS) ---
   void mostrarCarritoModal(BuildContext context) {
+    final bool isClosed = estaCerrado; // Alias para simplificar
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -580,14 +602,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         builder: (context, setModalState) {
           final currentEntries = carrito.entries.toList();
 
-          // LÓGICA: CERRAR RONDA (Mover al historial)
+          // L\u00d3GICA: CERRAR RONDA (Mover al historial)
           void cerrarRonda() {
-            if (carrito.isEmpty) return;
+            if (carrito.isEmpty || isClosed) return; // Chequeo de cerrado
             setState(() {
               historialRondas.add(Map.from(carrito)); // Mover a historial
               carrito.clear(); // Limpiar activo
             });
-            _guardarCarrito();
+            _guardarCarrito(); // Guardar el cambio
             setModalState((){});
             
             ScaffoldMessenger.of(context).showSnackBar(
@@ -625,7 +647,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                         ],
                       ),
                       
-                      // BOTÓN VER CUENTA COMPLETA (Icono de Recibo)
+                      // BOT\u00d3N VER CUENTA COMPLETA (Icono de Recibo)
                       if (!esDelivery && historialRondas.isNotEmpty)
                         IconButton(
                           onPressed: () => _mostrarHistorialCompleto(context),
@@ -636,6 +658,18 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     ],
                   ),
                 ),
+                
+                // MENSAJE DE CERRADO EN EL CARRITO
+                if (isClosed && currentEntries.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                    color: accentColor.withOpacity(0.3),
+                    child: Text(
+                      "\u26A0\uFE0F Est\u00e1 cerrado. No se puede modificar el pedido activo.",
+                      style: GoogleFonts.poppins(color: accentColor, fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ),
 
                 // LISTA ACTUAL
                 Expanded(
@@ -645,7 +679,10 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                           children: [
                             Icon(Icons.room_service_outlined, size: 80, color: Colors.white10),
                             const SizedBox(height: 10),
-                            Text("Listo para la siguiente ronda", style: GoogleFonts.poppins(color: Colors.grey[500], fontSize: 16)),
+                            Text(
+                              isClosed ? "Pedido inactivo (Negocio cerrado)" : "Listo para la siguiente ronda", 
+                              style: GoogleFonts.poppins(color: Colors.grey[500], fontSize: 16)
+                            ),
                             if (historialRondas.isNotEmpty)
                                Text("Tienes ${historialRondas.length} rondas anteriores guardadas.", style: GoogleFonts.poppins(color: primaryColor, fontSize: 12)),
                           ],
@@ -678,18 +715,26 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                 ),
                                 Row(
                                   children: [
-                                    _btnCant(Icons.remove, cant == 1 ? Colors.red.withOpacity(0.2) : Colors.white10, cant == 1 ? Colors.red : Colors.white, () {
-                                        gestionarCarrito(p, false);
-                                        setModalState((){}); setState((){}); 
-                                        if (carrito.isEmpty && historialRondas.isEmpty) Navigator.pop(context); 
-                                      }
-                                    ),
+                                    _btnCant(
+                                      Icons.remove, 
+                                      cant == 1 ? Colors.red.withOpacity(isClosed ? 0.1 : 0.2) : Colors.white.withOpacity(isClosed ? 0.05 : 0.1), // Deshabilitado visualmente
+                                      cant == 1 ? Colors.red.withOpacity(isClosed ? 0.3 : 1.0) : Colors.white.withOpacity(isClosed ? 0.3 : 1.0), 
+                                      isClosed ? () {} : () { // Deshabilitado por l\u00f3gica
+                                          gestionarCarrito(p, false);
+                                          setModalState((){}); setState((){}); 
+                                          if (carrito.isEmpty && historialRondas.isEmpty) Navigator.pop(context); 
+                                        }
+                                      ),
                                     SizedBox(width: 30, child: Center(child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: textWhite)))),
-                                    _btnCant(Icons.add, primaryColor.withOpacity(0.2), primaryColor, () {
-                                        gestionarCarrito(p, true);
-                                        setModalState((){}); setState((){});
-                                      }
-                                    ),
+                                    _btnCant(
+                                      Icons.add, 
+                                      primaryColor.withOpacity(isClosed ? 0.05 : 0.2), 
+                                      primaryColor.withOpacity(isClosed ? 0.3 : 1.0), 
+                                      isClosed ? () {} : () { // Deshabilitado por l\u00f3gica
+                                          gestionarCarrito(p, true);
+                                          setModalState((){}); setState((){});
+                                        }
+                                      ),
                                   ],
                                 )
                               ],
@@ -723,17 +768,17 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             width: double.infinity,
                             child: ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: accentColor, 
+                                backgroundColor: accentColor.withOpacity(isClosed ? 0.3 : 1.0), // Deshabilitado visual
                                 padding: const EdgeInsets.symmetric(vertical: 18),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                                 elevation: 0,
                               ),
-                              onPressed: carrito.isNotEmpty ? enviarPedidoWhatsApp : null,
-                              child: Text("Confirmar Delivery 🛵", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                              onPressed: carrito.isNotEmpty && !isClosed ? enviarPedidoWhatsApp : null, // Deshabilitado por l\u00f3gica
+                              child: Text("Confirmar Delivery \uD83D\uDEA4", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                             ),
                           )
                         else
-                          // MODO RESTAURANTE - Botón "Nueva Ronda"
+                          // MODO RESTAURANTE - Bot\u00f3n "Nueva Ronda"
                           Row(
                             children: [
                               Container(
@@ -747,10 +792,10 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                               ),
                               if (carrito.isNotEmpty)
                                 TextButton.icon(
-                                  onPressed: cerrarRonda, // Guarda ronda
+                                  onPressed: isClosed ? null : cerrarRonda, // Deshabilitado por l\u00f3gica
                                   style: TextButton.styleFrom(
-                                    foregroundColor: primaryColor,
-                                    backgroundColor: primaryColor.withOpacity(0.1),
+                                    foregroundColor: primaryColor.withOpacity(isClosed ? 0.3 : 1.0), // Deshabilitado visual
+                                    backgroundColor: primaryColor.withOpacity(isClosed ? 0.05 : 0.1),
                                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
                                   ),
@@ -902,10 +947,16 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                         "RD\$${getPrice(p).toStringAsFixed(0)}", 
                         style: GoogleFonts.poppins(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold),
                       ),
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(color: primaryColor, shape: BoxShape.circle),
-                        child: const Icon(Icons.add, color: Colors.white, size: 20),
+                      GestureDetector(
+                        onTap: estaCerrado ? null : () => gestionarCarrito(p, true), // Deshabilitado si est\u00e1 cerrado
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: primaryColor.withOpacity(estaCerrado ? 0.3 : 1.0), // Deshabilitado visual
+                            shape: BoxShape.circle
+                          ),
+                          child: const Icon(Icons.add, color: Colors.black, size: 20),
+                        ),
                       )
                     ],
                   )
@@ -1041,18 +1092,20 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             color: Colors.transparent,
                             child: InkWell(
                               borderRadius: BorderRadius.circular(10),
-                              onTap: () => gestionarCarrito(p, true), 
+                              onTap: estaCerrado ? null : () => gestionarCarrito(p, true), // Deshabilitado si est\u00e1 cerrado
                               child: AnimatedContainer( 
                                 duration: const Duration(milliseconds: 300),
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: isJustAdded ? primaryColor : Colors.white.withOpacity(0.05),
+                                  color: isJustAdded 
+                                    ? primaryColor 
+                                    : Colors.white.withOpacity(estaCerrado ? 0.02 : 0.05), // Deshabilitado visual
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Icon(
                                   isJustAdded ? Icons.check_rounded : Icons.add_rounded, 
                                   size: 24, 
-                                  color: isJustAdded ? Colors.black : primaryColor
+                                  color: isJustAdded ? Colors.black : primaryColor.withOpacity(estaCerrado ? 0.3 : 1.0) // Deshabilitado visual
                                 ),
                               ),
                             ),
@@ -1247,17 +1300,17 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       SizedBox(
                         width: 180,
                         child: ElevatedButton.icon(
-                          onPressed: () {
+                          onPressed: estaCerrado ? null : () { // Deshabilitado si est\u00e1 cerrado
                             gestionarCarrito(p, true);
                             Navigator.pop(context); 
                           },
                           icon: const Icon(Icons.add_shopping_cart, color: Colors.black),
                           label: Text(
-                            "Añadir",
+                            "A\u00f1adir",
                             style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black),
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: primaryColor,
+                            backgroundColor: primaryColor.withOpacity(estaCerrado ? 0.3 : 1.0), // Deshabilitado visual
                             padding: const EdgeInsets.symmetric(vertical: 15),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                             elevation: 5,

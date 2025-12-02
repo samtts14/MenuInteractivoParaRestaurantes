@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-// dart:typed_data ya no es necesario ni la importación de base64
+// La importación de dart:typed_data ya no es necesaria.
 
 // Importamos la página unificada para la navegación del menú (que usa la tabla Productos)
 import 'menu_page.dart';
@@ -48,7 +48,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
   String urlMapa = "https://maps.app.goo.gl/g2rA9JGpfewZb35T9";
   String telefonoWhatsapp = "18095550000"; 
   
-  // AÑADIDO: Mapa para guardar el horario de cada día.
+  // Mapa para guardar el horario de cada día.
   Map<String, String> horariosSemana = {};
 
   // URL del Script apuntando a la pestaña 'DatosNeg' en el MISMO sheet.
@@ -133,13 +133,10 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
       if (response.statusCode == 200) {
         final dynamic decodedData = jsonDecode(response.body);
         
-        // ... (Tu código de manejo de errores y verificación de lista)
-
+        // Manejo de errores y verificación de lista
         if (decodedData is List && decodedData.isNotEmpty) {
           final Map<String, dynamic> infoOriginal = decodedData[0]; 
           
-          // ... (Tu código de detección de error de script)
-
           // TRUCO: Normalizamos las claves para que no importen mayúsculas o espacios
           final Map<String, dynamic> info = {};
           infoOriginal.forEach((key, value) {
@@ -405,10 +402,8 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         ),
                       ),
                       
-                      // vvvvvvvvvv CAMBIO AQUÍ: AUMENTO DE ESPACIO SUPERIOR vvvvvvvvvv
+                      // COMIENZO DEL ESPACIO MODIFICADO
                       const SizedBox(height: 15), 
-                      // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
                       // ---------------- INDICADOR ABIERTO/CERRADO ----------------
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), // Un poco más de padding interno también
@@ -429,9 +424,8 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                       ),
                       // ---------------- FIN INDICADOR ----------------
 
-                      // vvvvvvvvvv CAMBIO AQUÍ: AUMENTO DRÁSTICO DE ESPACIO INFERIOR vvvvvvvvvv
-                      const SizedBox(height: 35), // Antes era 12, ahora 35 para separar del borde inferior
-                      // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                      const SizedBox(height: 35), // Espacio drástico
+                      // FIN DEL ESPACIO MODIFICADO
                     ],
                   ),
                 ),
@@ -489,6 +483,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                           builder: (_) => UniversalMenuPage(
                             tipoServicio: TipoServicio.restaurante,
                             telefonoNegocio: telefonoWhatsapp,
+                            estaAbierto: _estaAbiertoHoy, // PASANDO EL ESTADO DE APERTURA
                           ),
                         ),
                       );
@@ -508,7 +503,9 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                         MaterialPageRoute(
                           builder: (_) => UniversalMenuPage(
                             tipoServicio: TipoServicio.delivery,
-                            telefonoNegocio: telefonoWhatsapp,)
+                            telefonoNegocio: telefonoWhatsapp,
+                            estaAbierto: _estaAbiertoHoy, // PASANDO EL ESTADO DE APERTURA
+                          )
                         ),
                       );
                     },
