@@ -28,8 +28,9 @@ class UniversalMenuPage extends StatefulWidget {
 
 class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- CONFIGURACIÓN ----------------
-  final String endpoint =
-      'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec?table=Productos';
+  // URL base sin parámetros variables
+  final String baseUrl =
+      'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec';
   
   // ---------------- ESTADO ----------------
   List<Producto> productos = [];
@@ -67,20 +68,17 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
 
   @override
   void initState() {
-    final numOffers = productos.where((p) => p.enOferta).length;
-    final initialPage = numOffers > 0 ? _initialPage : 0;
-    
-    if (_pageController.initialPage == 0 && numOffers > 0) {
-        _pageController.jumpToPage(initialPage);
-    }
-    
+    // Inicialización del carrusel si hay ofertas cargadas previamente
+    // (generalmente productos inicia vacío, así que esto corre tras cargar)
     super.initState();
-    _cargarProductos(); // Esto también dispara la restauración del carrito
+    
+    // Iniciamos la carga
+    _cargarProductos(); 
 
     _pageController.addListener(() {
       int next = _pageController.page?.round() ?? 0;
       if (next != _paginaActual) {
-        setState(() => _paginaActual = next);
+        if (mounted) setState(() => _paginaActual = next);
       }
     });
 
@@ -102,9 +100,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   }
 
   // ---------------- PERSISTENCIA INTELIGENTE ----------------
-  // Esta lógica asegura que si refrescas, el carrito y las rondas vuelvan a aparecer.
 
-  // Helper para normalizar strings (evita problemas de mayúsculas/espacios en web)
+  // Helper robusto para comparar nombres (ignora mayúsculas y espacios)
   String _normalize(String text) => text.toLowerCase().trim();
 
   Future<void> _guardarCarrito() async {
@@ -122,43 +119,45 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         return rondaMap;
       }).toList();
 
-      // Guardamos en persistencia
       await prefs.setString('carrito_persistente', jsonEncode(carritoSimple));
       await prefs.setString('historial_persistente', jsonEncode(historialSimple));
 
-      // Guardamos hora solo si no existe
+      // Guardamos la hora en UTC para evitar problemas de zona horaria
       if (!prefs.containsKey('hora_inicio_orden')) {
-        await prefs.setString('hora_inicio_orden', DateTime.now().toIso8601String());
+        await prefs.setString('hora_inicio_orden', DateTime.now().toUtc().toIso8601String());
       }
+      
+      // Debug para web: confirmar guardado
+      // print("Guardado exitoso: ${carritoSimple.length} items"); 
     } catch (e) {
       debugPrint("Error al guardar persistencia: $e");
     }
   }
 
   Future<void> _restaurarCarrito(List<Producto> productosReferencia) async {
-    // Obtenemos instancia de SharedPreferences
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. BLOQUE DE TIEMPO (Isolado)
+    // 1. VERIFICACIÓN DE CADUCIDAD (5 HORAS) - Usando UTC
     try {
       final String? horaInicioStr = prefs.getString('hora_inicio_orden');
       if (horaInicioStr != null) {
-        final DateTime horaInicio = DateTime.parse(horaInicioStr);
-        final DateTime ahora = DateTime.now();
+        final DateTime horaInicio = DateTime.parse(horaInicioStr).toUtc();
+        final DateTime ahora = DateTime.now().toUtc();
         final Duration diferencia = ahora.difference(horaInicio);
 
-        // Si pasaron 5 horas, borramos y salimos.
+        // Si han pasado más de 5 horas, BORRAMOS TODO
+        // Nota: Agregamos protección para no borrar si la diferencia es negativa (reloj mal configurado)
         if (diferencia.inHours >= 5) {
-          debugPrint("La sesión de 5 horas caducó. Limpiando datos...");
+          debugPrint("Sesión caducada (5h+). Limpiando datos.");
           await _borrarDatosLocales(prefs);
           return; 
         }
       }
     } catch (e) {
-      debugPrint("Error verificando tiempo (se ignorará): $e");
+      debugPrint("Error verificando tiempo (se conservarán datos por seguridad): $e");
     }
 
-    // 2. BLOQUE DE CARRITO ACTUAL
+    // 2. RESTAURAR CARRITO ACTUAL
     try {
       final String? carritoJson = prefs.getString('carrito_persistente');
       if (carritoJson != null) {
@@ -167,13 +166,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         
         datos.forEach((nom, cant) {
             try {
-              // Búsqueda robusta usando _normalize para evitar errores de coincidencia
+              // Búsqueda insensible a mayúsculas/espacios
               final p = productosReferencia.firstWhere(
                 (element) => _normalize(element.nombre) == _normalize(nom)
               );
-              restaurado[p] = (cant as num).toInt(); // Cast seguro para web
+              restaurado[p] = (cant as num).toInt(); 
             } catch (_) {
-              // Producto no encontrado (posible cambio de nombre en DB)
+              // Si el producto cambió de nombre en la BD, se pierde del carrito (comportamiento esperado)
+              debugPrint("Producto no encontrado al restaurar: $nom");
             }
         });
         
@@ -188,7 +188,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       debugPrint("Error restaurando carrito json: $e");
     }
 
-    // 3. BLOQUE DE HISTORIAL
+    // 3. RESTAURAR HISTORIAL
     try {
       final String? historialJson = prefs.getString('historial_persistente');
       if (historialJson != null) {
@@ -201,7 +201,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           
           rondaMap.forEach((nom, cant) {
             try {
-               // Búsqueda robusta usando _normalize
               final p = productosReferencia.firstWhere(
                 (element) => _normalize(element.nombre) == _normalize(nom)
               );
@@ -236,7 +235,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- CARGA DE DATOS ----------------
   Future<void> _cargarProductos() async {
     try {
-      final response = await http.get(Uri.parse(endpoint));
+      // FIX CRÍTICO PARA WEB: Agregamos un parámetro aleatorio al final de la URL
+      // Esto evita que el navegador use una versión cacheada vieja del JSON
+      final String urlConCacheBuster = '$baseUrl?table=Productos&v=${DateTime.now().millisecondsSinceEpoch}';
+      
+      final response = await http.get(Uri.parse(urlConCacheBuster));
+      
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         final List<Producto> listaFresca = _parsearProductos(data);
@@ -247,8 +251,15 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             _aplicarFiltros();
             cargando = false;
           });
-          // IMPORTANTE: Una vez tenemos los productos, restauramos lo guardado
-          _restaurarCarrito(listaFresca); 
+          
+          // INICIALIZAR CARRUSEL SI ES NECESARIO
+          final numOffers = listaFresca.where((p) => p.enOferta).length;
+          if (_pageController.hasClients && _pageController.page == 0 && numOffers > 0) {
+             _pageController.jumpToPage(_initialPage);
+          }
+
+          // RESTAURAR CARRITO (Pasamos la lista fresca)
+          await _restaurarCarrito(listaFresca); 
         }
       } else {
           if (mounted) setState(() => cargando = false);
@@ -262,7 +273,10 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   List<Producto> _parsearProductos(List<dynamic> jsonList) {
     return jsonList
         .map((e) => Producto.fromJson(e))
-        .where((p) => p.nombre.isNotEmpty && p.estado.toLowerCase() == 'disponible')
+        .where((p) => 
+            p.nombre.trim().isNotEmpty && 
+            p.estado.trim().toLowerCase() == 'disponible' // Trim agregado por seguridad
+        )
         .toList();
   }
 
@@ -303,7 +317,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     _aplicarFiltros();
   }
 
-  // AHORA ES ASYNC para asegurar que _guardarCarrito termine
   Future<void> gestionarCarrito(Producto p, bool agregar) async {
     if (estaCerrado) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -333,7 +346,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       }
     });
     
-    // GUARDADO SEGURO
+    // Await para asegurar escritura en disco/memoria antes de cualquier refresco
     await _guardarCarrito(); 
   }
 
@@ -356,7 +369,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   void enviarPedidoWhatsApp() async {
     if (estaCerrado) return;
 
-    String titulo = esDelivery ? "🚚 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
+    String titulo = esDelivery ? "🛵💨 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
     String mensaje = "$titulo\n\n";
 
     carrito.forEach((p, cant) {
