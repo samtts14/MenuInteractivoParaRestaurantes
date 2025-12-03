@@ -71,7 +71,7 @@ class Producto {
     if (trimmed.startsWith('http') || trimmed.startsWith('data:')) return trimmed;
 
     // TUS CREDENCIALES
-    const appId = '374bdfe2-1d55-47b1-9879-370c0f44bba0';
+    const appId = '15e7eaec-dd89-454a-9e00-13d3ee5094ed';
     const tableName = 'Productos';
 
     return 'https://www.appsheet.com/template/gettablefileurl?appName=$appId&tableName=$tableName&fileName=$trimmed';
