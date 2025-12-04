@@ -4,7 +4,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:shared_preferences/shared_preferences.dart'; 
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geolocator/geolocator.dart'; // NECESARIO PARA GPS
 import 'productos.dart';
 
 // Enum para saber en qué modo estamos
@@ -28,7 +29,6 @@ class UniversalMenuPage extends StatefulWidget {
 
 class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- CONFIGURACIÓN ----------------
-  // URL base sin parámetros variables
   final String baseUrl =
       'https://script.google.com/macros/s/AKfycbz59V25BN0CUM0z3aecZ7WZK8iRRYiZ3vJf2dnKXU5E5hZEypUjj1Ugj9y6UrzgmCuc/exec';
   
@@ -40,8 +40,13 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   String filtroBusqueda = '';
   final Map<Producto, bool> _justAdded = {}; 
 
-  // CARRITO Y HISTORIAL DE RONDAS
+  // CARRITO Y NOTAS
   final Map<Producto, int> carrito = {}; 
+  // Mapa para guardar notas específicas por nombre de producto
+  final Map<String, String> notasPorProducto = {}; 
+  // Controlador para nota general
+  final TextEditingController _notaGeneralController = TextEditingController();
+
   List<Map<Producto, int>> historialRondas = []; 
 
   // Variables para el Carrusel
@@ -53,7 +58,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   int _paginaActual = 0;
   Timer? _timer;
 
-  // ---------------- COLORES DE LA MARCA (PARMESANO DARK) ----------------
+  // ---------------- COLORES DE LA MARCA ----------------
   final primaryColor = const Color(0xFFE08D00); // Naranja Mostaza
   final secondaryColor = const Color(0xFF000000); // Negro Puro (Fondo)
   final cardColor = const Color(0xFF1E1E1E); // Gris Oscuro (Tarjetas)
@@ -65,14 +70,9 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   bool get estaAbierto => widget.estaAbierto; 
   bool get estaCerrado => !widget.estaAbierto; 
 
-
   @override
   void initState() {
-    // Inicialización del carrusel si hay ofertas cargadas previamente
-    // (generalmente productos inicia vacío, así que esto corre tras cargar)
     super.initState();
-    
-    // Iniciamos la carga
     _cargarProductos(); 
 
     _pageController.addListener(() {
@@ -96,23 +96,20 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   void dispose() {
     _timer?.cancel();
     _pageController.dispose();
+    _notaGeneralController.dispose();
     super.dispose();
   }
 
   // ---------------- PERSISTENCIA INTELIGENTE ----------------
-
-  // Helper robusto para comparar nombres (ignora mayúsculas y espacios)
   String _normalize(String text) => text.toLowerCase().trim();
 
   Future<void> _guardarCarrito() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       
-      // 1. Convertir Carrito Actual a JSON
       final Map<String, int> carritoSimple = {};
       carrito.forEach((p, c) => carritoSimple[p.nombre] = c);
       
-      // 2. Convertir Historial a JSON
       final List<Map<String, int>> historialSimple = historialRondas.map((ronda) {
         final Map<String, int> rondaMap = {};
         ronda.forEach((p, c) => rondaMap[p.nombre] = c);
@@ -121,14 +118,11 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
 
       await prefs.setString('carrito_persistente', jsonEncode(carritoSimple));
       await prefs.setString('historial_persistente', jsonEncode(historialSimple));
+      await prefs.setString('notas_productos', jsonEncode(notasPorProducto));
 
-      // Guardamos la hora en UTC para evitar problemas de zona horaria
       if (!prefs.containsKey('hora_inicio_orden')) {
         await prefs.setString('hora_inicio_orden', DateTime.now().toUtc().toIso8601String());
       }
-      
-      // Debug para web: confirmar guardado
-      // print("Guardado exitoso: ${carritoSimple.length} items"); 
     } catch (e) {
       debugPrint("Error al guardar persistencia: $e");
     }
@@ -137,7 +131,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   Future<void> _restaurarCarrito(List<Producto> productosReferencia) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. VERIFICACIÓN DE CADUCIDAD (5 HORAS) - Usando UTC
     try {
       final String? horaInicioStr = prefs.getString('hora_inicio_orden');
       if (horaInicioStr != null) {
@@ -145,8 +138,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         final DateTime ahora = DateTime.now().toUtc();
         final Duration diferencia = ahora.difference(horaInicio);
 
-        // Si han pasado más de 5 horas, BORRAMOS TODO
-        // Nota: Agregamos protección para no borrar si la diferencia es negativa (reloj mal configurado)
         if (diferencia.inHours >= 5) {
           debugPrint("Sesión caducada (5h+). Limpiando datos.");
           await _borrarDatosLocales(prefs);
@@ -154,10 +145,9 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         }
       }
     } catch (e) {
-      debugPrint("Error verificando tiempo (se conservarán datos por seguridad): $e");
+      debugPrint("Error verificando tiempo: $e");
     }
 
-    // 2. RESTAURAR CARRITO ACTUAL
     try {
       final String? carritoJson = prefs.getString('carrito_persistente');
       if (carritoJson != null) {
@@ -166,15 +156,11 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         
         datos.forEach((nom, cant) {
             try {
-              // Búsqueda insensible a mayúsculas/espacios
               final p = productosReferencia.firstWhere(
                 (element) => _normalize(element.nombre) == _normalize(nom)
               );
               restaurado[p] = (cant as num).toInt(); 
-            } catch (_) {
-              // Si el producto cambió de nombre en la BD, se pierde del carrito (comportamiento esperado)
-              debugPrint("Producto no encontrado al restaurar: $nom");
-            }
+            } catch (_) {}
         });
         
         if (restaurado.isNotEmpty && mounted) {
@@ -184,11 +170,19 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           });
         }
       }
-    } catch (e) {
-      debugPrint("Error restaurando carrito json: $e");
-    }
+    } catch (e) { debugPrint("Error restaurando carrito: $e"); }
 
-    // 3. RESTAURAR HISTORIAL
+    try {
+      final String? notasJson = prefs.getString('notas_productos');
+      if (notasJson != null) {
+        final Map<String, dynamic> datos = jsonDecode(notasJson);
+        setState(() {
+          notasPorProducto.clear();
+          datos.forEach((k, v) => notasPorProducto[k] = v.toString());
+        });
+      }
+    } catch (e) { debugPrint("Error notas: $e"); }
+
     try {
       final String? historialJson = prefs.getString('historial_persistente');
       if (historialJson != null) {
@@ -198,7 +192,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         for (var ronda in listaRondas) {
           final Map<String, dynamic> rondaMap = ronda;
           final Map<Producto, int> rondaObj = {};
-          
           rondaMap.forEach((nom, cant) {
             try {
               final p = productosReferencia.firstWhere(
@@ -207,27 +200,26 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
               rondaObj[p] = (cant as num).toInt();
             } catch (_) {}
           });
-          
           if (rondaObj.isNotEmpty) historialRestaurado.add(rondaObj);
         }
-        
         if (historialRestaurado.isNotEmpty && mounted) {
           setState(() => historialRondas = historialRestaurado);
         }
       }
-    } catch (e) {
-      debugPrint("Error restaurando historial: $e");
-    }
+    } catch (e) { debugPrint("Error restaurando historial: $e"); }
   }
 
   Future<void> _borrarDatosLocales(SharedPreferences prefs) async {
     await prefs.remove('carrito_persistente');
     await prefs.remove('historial_persistente');
     await prefs.remove('hora_inicio_orden');
+    await prefs.remove('notas_productos');
     if (mounted) {
       setState(() {
         carrito.clear();
         historialRondas.clear();
+        notasPorProducto.clear();
+        _notaGeneralController.clear();
       });
     }
   }
@@ -235,10 +227,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- CARGA DE DATOS ----------------
   Future<void> _cargarProductos() async {
     try {
-      // FIX CRÍTICO PARA WEB: Agregamos un parámetro aleatorio al final de la URL
-      // Esto evita que el navegador use una versión cacheada vieja del JSON
       final String urlConCacheBuster = '$baseUrl?table=Productos&v=${DateTime.now().millisecondsSinceEpoch}';
-      
       final response = await http.get(Uri.parse(urlConCacheBuster));
       
       if (response.statusCode == 200) {
@@ -252,13 +241,11 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             cargando = false;
           });
           
-          // INICIALIZAR CARRUSEL SI ES NECESARIO
           final numOffers = listaFresca.where((p) => p.enOferta).length;
           if (_pageController.hasClients && _pageController.page == 0 && numOffers > 0) {
              _pageController.jumpToPage(_initialPage);
           }
 
-          // RESTAURAR CARRITO (Pasamos la lista fresca)
           await _restaurarCarrito(listaFresca); 
         }
       } else {
@@ -275,7 +262,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         .map((e) => Producto.fromJson(e))
         .where((p) => 
             p.nombre.trim().isNotEmpty && 
-            p.estado.trim().toLowerCase() == 'disponible' // Trim agregado por seguridad
+            p.estado.trim().toLowerCase() == 'disponible' 
         )
         .toList();
   }
@@ -320,7 +307,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   Future<void> gestionarCarrito(Producto p, bool agregar) async {
     if (estaCerrado) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("El negocio está cerrado, no se pueden añadir o eliminar items.", style: GoogleFonts.poppins()), backgroundColor: accentColor)
+        SnackBar(content: Text("El negocio está cerrado.", style: GoogleFonts.poppins()), backgroundColor: accentColor)
       );
       return;
     }
@@ -329,24 +316,19 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       if (agregar) {
         carrito[p] = (carrito[p] ?? 0) + 1;
         _justAdded[p] = true;
-        // Reiniciamos el timer para la animación de "Agregado"
         Timer(const Duration(milliseconds: 700), () {
-          if (mounted) {
-            setState(() {
-              _justAdded.remove(p);
-            });
-          }
+          if (mounted) setState(() => _justAdded.remove(p));
         });
       } else {
         if (carrito[p] != null && carrito[p]! > 1) {
           carrito[p] = carrito[p]! - 1;
         } else {
           carrito.remove(p);
+          notasPorProducto.remove(p.nombre);
         }
       }
     });
     
-    // Await para asegurar escritura en disco/memoria antes de cualquier refresco
     await _guardarCarrito(); 
   }
 
@@ -366,145 +348,298 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     return total;
   }
 
-  // --- LÓGICA DE ENVÍO POR WHATSAPP (MODIFICADA) ---
-  
-  void enviarPedidoWhatsApp() {
-    if (estaCerrado) return;
+  // --- LÓGICA DE GEOLOCALIZACIÓN MEJORADA ---
+
+  Future<Position?> _determinarPosicion(BuildContext context) async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (context.mounted) {
+        _mostrarAlertaGPS(context, 
+          "El GPS está desactivado", 
+          "Por favor enciende la ubicación para continuar."
+        );
+      }
+      return null;
+    }
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permiso de ubicación denegado.'))
+          );
+        }
+        return null;
+      }
+    }
     
-    // Si es Delivery, pedimos dirección primero
-    if (esDelivery) {
-      _mostrarDialogoDireccion();
-    } else {
-      // Si es Restaurante (mesa), se envía directo sin dirección
-      _generarYEnviarMensaje(null);
+    if (permission == LocationPermission.deniedForever) {
+      if (context.mounted) {
+        _mostrarAlertaPermisos(context);
+      }
+      return null;
+    } 
+
+    try {
+      return await Geolocator.getCurrentPosition(
+        timeLimit: const Duration(seconds: 10),
+        desiredAccuracy: LocationAccuracy.high
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error obteniendo ubicación: $e'))
+        );
+      }
+      return null;
     }
   }
 
-  void _mostrarDialogoDireccion() {
+  void _mostrarAlertaPermisos(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardColor,
+        title: Text("Permisos Necesarios", style: GoogleFonts.poppins(color: Colors.white)),
+        content: Text(
+          "El permiso de ubicación está bloqueado permanentemente. Debes ir a la configuración de la app y activarlo manualmente.",
+          style: GoogleFonts.poppins(color: Colors.white70)
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancelar", style: TextStyle(color: Colors.red)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Geolocator.openAppSettings(); 
+            },
+            child: const Text("Abrir Configuración", style: TextStyle(color: Colors.black)),
+          )
+        ],
+      )
+    );
+  }
+
+  void _mostrarAlertaGPS(BuildContext context, String titulo, String msj) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardColor,
+        title: Text(titulo, style: GoogleFonts.poppins(color: Colors.white)),
+        content: Text(msj, style: GoogleFonts.poppins(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Entendido", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      )
+    );
+  }
+
+  // --- LÓGICA DE ENVÍO POR WHATSAPP (ACTUALIZADA) ---
+  
+  void enviarPedidoWhatsApp() {
+    if (estaCerrado) return;
+    _mostrarDialogoDatosPedido();
+  }
+
+  void _mostrarDialogoDatosPedido() {
+    final txtNombre = TextEditingController();
     final txtDireccion = TextEditingController();
-    bool usarGPS = false; // false = Manual, true = GPS
+    
+    // 0: Escribir, 1: GPS, 2: Recoger
+    int modoUbicacion = 0;
+    
+    bool obteniendoGPS = false;
+    String? googleMapsLink;
 
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) {
+          
+          Widget buildOptionButton(int index, IconData icon, String label) {
+            final isSelected = modoUbicacion == index;
+            return Expanded(
+              child: GestureDetector(
+                onTap: () async {
+                   // Si toca el de GPS (índice 1), ejecutamos lógica especial
+                   if (index == 1) {
+                     setDialogState(() { modoUbicacion = 1; obteniendoGPS = true; });
+                     Position? pos = await _determinarPosicion(ctx);
+                     if (pos != null) {
+                       String link = "https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}";
+                       setDialogState(() { 
+                         obteniendoGPS = false; 
+                         googleMapsLink = link;
+                       });
+                     } else {
+                       // Si falla, volvemos a modo manual por defecto
+                       setDialogState(() { 
+                         obteniendoGPS = false; 
+                         modoUbicacion = 0; 
+                       });
+                     }
+                   } else {
+                     setDialogState(() { 
+                       modoUbicacion = index; 
+                       obteniendoGPS = false; 
+                       googleMapsLink = null;
+                     });
+                   }
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: isSelected ? primaryColor.withOpacity(0.2) : Colors.black12,
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: isSelected ? primaryColor : Colors.white10, width: 2)
+                  ),
+                  child: Column(
+                    children: [
+                      if (index == 1 && obteniendoGPS)
+                        SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: primaryColor, strokeWidth: 2))
+                      else
+                        Icon(icon, color: isSelected ? primaryColor : Colors.white54, size: 24),
+                      const SizedBox(height: 6),
+                      Text(
+                        label, 
+                        textAlign: TextAlign.center, 
+                        style: GoogleFonts.poppins(color: isSelected ? Colors.white : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)
+                      )
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+
           return AlertDialog(
             backgroundColor: cardColor,
             scrollable: true,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             title: Row(
               children: [
-                Icon(Icons.location_on, color: primaryColor),
+                Icon(esDelivery ? Icons.delivery_dining : Icons.restaurant_menu, color: primaryColor),
                 const SizedBox(width: 10),
-                Expanded(child: Text("Datos de Entrega", style: GoogleFonts.poppins(color: textWhite, fontWeight: FontWeight.bold, fontSize: 18))),
+                Expanded(child: Text(esDelivery ? "Datos de Envío" : "Confirmar Pedido", style: GoogleFonts.poppins(color: textWhite, fontWeight: FontWeight.bold, fontSize: 18))),
               ],
             ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  "¿Cómo deseas indicarnos tu ubicación?",
-                  style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13),
+                // --- CAMPO NOMBRE (SIEMPRE VISIBLE) ---
+                Text("¿A nombre de quién?", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: txtNombre,
+                  style: GoogleFonts.poppins(color: Colors.white),
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    hintText: "Tu Nombre",
+                    hintStyle: TextStyle(color: Colors.grey[600]),
+                    filled: true,
+                    fillColor: Colors.black26,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    prefixIcon: const Icon(Icons.person, color: Colors.grey),
+                  ),
                 ),
                 const SizedBox(height: 20),
-                
-                // --- SELECTOR INTERACTIVO ---
-                Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => setDialogState(() => usarGPS = false),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
-                          decoration: BoxDecoration(
-                            color: !usarGPS ? primaryColor.withOpacity(0.2) : Colors.black12,
-                            borderRadius: BorderRadius.circular(15),
-                            border: Border.all(
-                              color: !usarGPS ? primaryColor : Colors.white10,
-                              width: 2
-                            )
-                          ),
-                          child: Column(
-                            children: [
-                              Icon(Icons.edit_location_alt, color: !usarGPS ? primaryColor : Colors.white54, size: 28),
-                              const SizedBox(height: 8),
-                              Text("Escribir\nDirección", textAlign: TextAlign.center, style: GoogleFonts.poppins(color: !usarGPS ? Colors.white : Colors.white54, fontSize: 12, fontWeight: FontWeight.bold))
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => setDialogState(() => usarGPS = true),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
-                          decoration: BoxDecoration(
-                            color: usarGPS ? primaryColor.withOpacity(0.2) : Colors.black12,
-                            borderRadius: BorderRadius.circular(15),
-                            border: Border.all(
-                              color: usarGPS ? primaryColor : Colors.white10,
-                              width: 2
-                            )
-                          ),
-                          child: Column(
-                            children: [
-                              Icon(Icons.share_location, color: usarGPS ? primaryColor : Colors.white54, size: 28),
-                              const SizedBox(height: 8),
-                              Text("Enviar\nUbicación Actual", textAlign: TextAlign.center, style: GoogleFonts.poppins(color: usarGPS ? Colors.white : Colors.white54, fontSize: 12, fontWeight: FontWeight.bold))
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
 
-                const SizedBox(height: 20),
+                // --- SECCIÓN DE DIRECCIÓN (SOLO SI ES DELIVERY) ---
+                if (esDelivery) ...[
+                  Text(
+                    "Método de entrega:",
+                    style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  
+                  // --- TRES OPCIONES: ESCRIBIR | GPS | RECOGER ---
+                  Row(
+                    children: [
+                      buildOptionButton(0, Icons.edit_location_alt, "Escribir\nDirección"),
+                      const SizedBox(width: 8),
+                      buildOptionButton(1, Icons.my_location, "Ubicación\nGPS"),
+                      const SizedBox(width: 8),
+                      buildOptionButton(2, Icons.storefront, "Pasar a\nRecoger"),
+                    ],
+                  ),
 
-                // --- CONTENIDO VARIABLE ---
-                if (!usarGPS)
-                  TextField(
-                    controller: txtDireccion,
-                    style: GoogleFonts.poppins(color: Colors.white),
-                    maxLines: 2,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: InputDecoration(
-                      labelText: "Escribe tu dirección",
-                      hintText: "Calle, #Casa, Sector...",
-                      labelStyle: TextStyle(color: Colors.grey[400]),
-                      hintStyle: TextStyle(color: Colors.grey[600]),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                      prefixIcon: const Icon(Icons.home, color: Colors.grey),
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.all(15),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.withOpacity(0.3))
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.chat, color: Colors.green), // FIXED: Usamos Icons.chat en vez de Icons.whatsapp
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            "¡Genial! Podrás enviarnos tu 'Ubicación actual' directamente en el chat de WhatsApp.",
-                            style: GoogleFonts.poppins(color: Colors.white, fontSize: 12),
-                          ),
-                        )
-                      ],
-                    ),
-                  )
+                  const SizedBox(height: 20),
+
+                  // --- CONTENIDO VARIABLE SEGÚN SELECCIÓN ---
+                  if (modoUbicacion == 0)
+                    TextField(
+                      controller: txtDireccion,
+                      style: GoogleFonts.poppins(color: Colors.white),
+                      maxLines: 2,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: InputDecoration(
+                        labelText: "Escribe tu dirección",
+                        hintText: "Calle, #Casa, Sector...",
+                        labelStyle: TextStyle(color: Colors.grey[400]),
+                        hintStyle: TextStyle(color: Colors.grey[600]),
+                        filled: true,
+                        fillColor: Colors.black26,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                        prefixIcon: const Icon(Icons.home, color: Colors.grey),
+                      ),
+                    )
+                  else if (modoUbicacion == 1 && googleMapsLink != null)
+                    Container(
+                      padding: const EdgeInsets.all(15),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.green.withOpacity(0.3))
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.green),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              "¡Ubicación detectada! Se enviará el mapa exacto.",
+                              style: GoogleFonts.poppins(color: Colors.white, fontSize: 12),
+                            ),
+                          )
+                        ],
+                      ),
+                    )
+                  else if (modoUbicacion == 2)
+                    Container(
+                      padding: const EdgeInsets.all(15),
+                      decoration: BoxDecoration(
+                        color: primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: primaryColor.withOpacity(0.3))
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.directions_walk, color: primaryColor),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              "Pasarás a recoger tu pedido por el local. No necesitas poner dirección.",
+                              style: GoogleFonts.poppins(color: Colors.white, fontSize: 12),
+                            ),
+                          )
+                        ],
+                      ),
+                    )
+                ]
               ],
             ),
             actions: [
@@ -518,9 +653,17 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10)
                 ),
-                onPressed: () {
-                  // Validación
-                  if (!usarGPS && txtDireccion.text.trim().isEmpty) {
+                onPressed: obteniendoGPS ? null : () {
+                  // VALIDACIONES
+                  if (txtNombre.text.trim().isEmpty) {
+                     ScaffoldMessenger.of(context).showSnackBar(
+                       SnackBar(content: Text("Por favor escribe tu nombre.", style: GoogleFonts.poppins()))
+                     );
+                     return;
+                  }
+
+                  // Si es delivery, validamos dirección SOLO si no es "Recoger"
+                  if (esDelivery && modoUbicacion == 0 && txtDireccion.text.trim().isEmpty) {
                      ScaffoldMessenger.of(context).showSnackBar(
                        SnackBar(content: Text("Por favor escribe una dirección.", style: GoogleFonts.poppins()))
                      );
@@ -529,14 +672,26 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   
                   Navigator.pop(ctx); // Cerrar diálogo
                   
-                  // Preparar texto de dirección
-                  String infoDireccion = usarGPS 
-                      ? "📍 *Ubicación:* Cliente enviará ubicación GPS por el chat."
-                      : "🏠 *Dirección:* ${txtDireccion.text.trim()}";
+                  // Preparar datos
+                  String infoDireccion = "";
+                  if (esDelivery) {
+                    if (modoUbicacion == 1 && googleMapsLink != null) {
+                      infoDireccion = "📍 *Ubicación GPS:* $googleMapsLink";
+                    } else if (modoUbicacion == 2) {
+                      infoDireccion = "🏃 *Método de Entrega:* PASARÉ A RECOGER";
+                    } else {
+                      infoDireccion = "🏠 *Dirección:* ${txtDireccion.text.trim()}";
+                    }
+                  }
                       
-                  _generarYEnviarMensaje(infoDireccion);
+                  // MODIFICACIÓN CLAVE: Pasamos el flag si es recogida (modoUbicacion == 2)
+                  _generarYEnviarMensaje(
+                    txtNombre.text.trim(), 
+                    esDelivery ? infoDireccion : null, 
+                    esRecogida: (esDelivery && modoUbicacion == 2)
+                  );
                 },
-                child: Text("Continuar al Chat", style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold)),
+                child: Text("Enviar Pedido", style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold)),
               )
             ],
           );
@@ -545,19 +700,44 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  void _generarYEnviarMensaje(String? infoDireccion) async {
-    String titulo = esDelivery ? "🛵💨 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
-    String mensaje = "$titulo\n\n";
+  void _generarYEnviarMensaje(String nombreCliente, String? infoDireccion, {bool esRecogida = false}) async {
+    // LÓGICA DE TÍTULO ACTUALIZADA
+    String titulo;
+    
+    if (esDelivery) {
+      if (esRecogida) {
+        titulo = "🥡 *Para Recoger en Restaurante*"; // Mensaje específico para Takeout
+      } else {
+        titulo = "🛵💨 *Pedido Para Delivery*";
+      }
+    } else {
+      titulo = "🍽️ *Pedido en Mesa*";
+    }
 
+    String mensaje = "$titulo\n\n";
+    mensaje += "👤 *Cliente:* $nombreCliente\n\n";
+
+    // Productos
     carrito.forEach((p, cant) {
-      mensaje +=
-          "• ${p.nombre} x$cant - RD\$${(getPrice(p) * cant).toStringAsFixed(0)}\n";
+      String linea = "• ${p.nombre} x$cant - RD\$${(getPrice(p) * cant).toStringAsFixed(0)}";
+      
+      // Agregar Nota Específica del producto (Formato WhatsApp Mejorado)
+      if (notasPorProducto.containsKey(p.nombre) && notasPorProducto[p.nombre]!.isNotEmpty) {
+        // Usamos negrita y un ícono de mano para que resalte
+        linea += "\n  👉 *NOTA:* ${notasPorProducto[p.nombre]}";
+      }
+      mensaje += "$linea\n";
     });
+
+    // Nota General
+    if (_notaGeneralController.text.trim().isNotEmpty) {
+      mensaje += "\n📝 *NOTA GENERAL:* ${_notaGeneralController.text.trim()}\n";
+    }
 
     mensaje += "\n*Total de Orden: RD\$${totalCarrito.toStringAsFixed(2)}*";
     
     // Agregamos la dirección si existe
-    if (infoDireccion != null) {
+    if (infoDireccion != null && infoDireccion.isNotEmpty) {
       mensaje += "\n\n$infoDireccion";
     }
 
@@ -569,7 +749,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           await launchUrl(url, mode: LaunchMode.externalApplication);
            if (mounted) {
              final prefs = await SharedPreferences.getInstance();
-             // Solo borramos si es delivery completo. En mesa se mantiene hasta cierre manual o timeout.
              if(esDelivery) await _borrarDatosLocales(prefs); 
              
              Navigator.pop(context); // Cierra la pantalla de menú
@@ -588,6 +767,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
   // ---------------- UI BUILD ----------------
   @override
   Widget build(BuildContext context) {
+    // ... (El build principal no cambia mucho, solo llamamos al modal actualizado)
     final Set<String> cats = productos.map((p) => p.categoria).toSet();
     final List<String> listaCategorias = ["Todas", if (productos.any((p)=>p.enOferta)) "Ofertas", ...cats];
 
@@ -636,7 +816,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         children: [
           CustomScrollView(
             slivers: [
-              // BARRA DE ADVERTENCIA DE CIERRE
               if (estaCerrado)
                 SliverToBoxAdapter(
                   child: Container(
@@ -656,8 +835,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     ),
                   ),
                 ),
-                
-              // 1. BUSCADOR
               SliverToBoxAdapter(
                 child: Container(
                   color: secondaryColor,
@@ -677,8 +854,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   ),
                 ),
               ),
-
-              // 2. CHIPS DE CATEGORÍA
               SliverToBoxAdapter(
                 child: Container(
                   height: 60, 
@@ -722,8 +897,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     : _buildSkeletonChips(), 
                 ),
               ),
-
-              // 3. CARRUSEL DE OFERTAS
               if (mostrarCarrusel && !cargando)
                 SliverToBoxAdapter(
                   child: Padding(
@@ -751,8 +924,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     ),
                   ),
                 ),
-              
-              // 4. TÍTULO DE LISTA
               if (!cargando)
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -763,17 +934,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     ),
                   ),
                 ),
-
-              // 5. LISTA DE PRODUCTOS
               cargando 
                   ? SliverToBoxAdapter(child: _buildSkeletonList())
                   : _buildProductListSliver(productosFiltrados),
-              
               const SliverToBoxAdapter(child: SizedBox(height: 100)),
             ],
           ),
-
-          // 6. BARRA FLOTANTE DEL CARRITO
           if (carrito.isNotEmpty)
             Positioned(
               bottom: 20,
@@ -825,7 +991,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- MODAL DE CARRITO ---
+  // --- MODAL DE CARRITO (ACTUALIZADO CON NOTAS) ---
   void mostrarCarritoModal(BuildContext context) {
     final bool isClosed = estaCerrado;
 
@@ -842,8 +1008,9 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             setState(() {
               historialRondas.add(Map.from(carrito)); 
               carrito.clear(); 
+              notasPorProducto.clear();
             });
-            _guardarCarrito(); // Guardamos el cambio
+            _guardarCarrito(); 
             setModalState((){});
             
             ScaffoldMessenger.of(context).showSnackBar(
@@ -856,7 +1023,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           }
 
           return Container(
-            height: MediaQuery.of(context).size.height * 0.85,
+            height: MediaQuery.of(context).size.height * 0.9,
             decoration: BoxDecoration(
               color: cardColor,
               borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
@@ -880,7 +1047,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             Text("Ronda Actual #${historialRondas.length + 1}", style: GoogleFonts.poppins(fontSize: 12, color: primaryColor)),
                         ],
                       ),
-                      
                       if (!esDelivery && historialRondas.isNotEmpty)
                         IconButton(
                           onPressed: () => _mostrarHistorialCompleto(context),
@@ -912,62 +1078,110 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             Icon(Icons.room_service_outlined, size: 80, color: Colors.white10),
                             const SizedBox(height: 10),
                             Text(
-                              isClosed ? "Pedido inactivo (Negocio cerrado)" : "Listo para la siguiente ronda", 
+                              isClosed ? "Pedido inactivo" : "Listo para pedir", 
                               style: GoogleFonts.poppins(color: Colors.grey[500], fontSize: 16)
                             ),
-                            if (historialRondas.isNotEmpty)
-                               Text("Tienes ${historialRondas.length} rondas anteriores guardadas.", style: GoogleFonts.poppins(color: primaryColor, fontSize: 12)),
                           ],
                         ))
                       : ListView.separated(
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          itemCount: currentEntries.length, 
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                          itemCount: currentEntries.length + 1, // +1 para la nota general al final
                           separatorBuilder: (_,__) => Divider(height: 30, color: Colors.white10),
                           itemBuilder: (context, index) {
+                            // --- INPUT DE NOTA GENERAL AL FINAL ---
+                            if (index == currentEntries.length) {
+                               return Padding(
+                                 padding: const EdgeInsets.only(top: 20, bottom: 10),
+                                 child: TextField(
+                                   controller: _notaGeneralController,
+                                   style: GoogleFonts.poppins(color: Colors.white),
+                                   decoration: InputDecoration(
+                                     hintText: "📝 Nota general (ej: Servilletas extra, pago con 1000...)",
+                                     hintStyle: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                     filled: true,
+                                     fillColor: Colors.black26,
+                                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                                     contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12)
+                                   ),
+                                 ),
+                               );
+                            }
+
                             final entry = currentEntries[index];
                             final p = entry.key;
                             final cant = carrito[p] ?? 0; 
                             if (cant == 0) return const SizedBox.shrink();
 
-                            return Row(
+                            return Column(
                               children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.network(p.imagen, width: 60, height: 60, fit: BoxFit.cover, cacheWidth: 120),
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(p.nombre, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15, color: textWhite)),
-                                      Text("RD\$${getPrice(p).toStringAsFixed(0)}", style: GoogleFonts.poppins(color: primaryColor, fontSize: 13)),
-                                    ],
-                                  ),
-                                ),
                                 Row(
                                   children: [
-                                    _btnCant(
-                                      Icons.remove, 
-                                      cant == 1 ? Colors.red.withOpacity(isClosed ? 0.1 : 0.2) : Colors.white.withOpacity(isClosed ? 0.05 : 0.1),
-                                      cant == 1 ? Colors.red.withOpacity(isClosed ? 0.3 : 1.0) : Colors.white.withOpacity(isClosed ? 0.3 : 1.0), 
-                                      isClosed ? () {} : () {
-                                          gestionarCarrito(p, false);
-                                          setModalState((){}); setState((){}); 
-                                          if (carrito.isEmpty && historialRondas.isEmpty) Navigator.pop(context); 
-                                      }
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Image.network(p.imagen, width: 60, height: 60, fit: BoxFit.cover, cacheWidth: 120),
                                     ),
-                                    SizedBox(width: 30, child: Center(child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: textWhite)))),
-                                    _btnCant(
-                                      Icons.add, 
-                                      primaryColor.withOpacity(isClosed ? 0.05 : 0.2), 
-                                      primaryColor.withOpacity(isClosed ? 0.3 : 1.0), 
-                                      isClosed ? () {} : () {
-                                          gestionarCarrito(p, true);
-                                          setModalState((){}); setState((){});
-                                      }
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(p.nombre, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15, color: textWhite)),
+                                          Text("RD\$${getPrice(p).toStringAsFixed(0)}", style: GoogleFonts.poppins(color: primaryColor, fontSize: 13)),
+                                        ],
+                                      ),
                                     ),
+                                    Row(
+                                      children: [
+                                        _btnCant(
+                                          Icons.remove, 
+                                          cant == 1 ? Colors.red.withOpacity(isClosed ? 0.1 : 0.2) : Colors.white.withOpacity(isClosed ? 0.05 : 0.1),
+                                          cant == 1 ? Colors.red.withOpacity(isClosed ? 0.3 : 1.0) : Colors.white.withOpacity(isClosed ? 0.3 : 1.0), 
+                                          isClosed ? () {} : () {
+                                              gestionarCarrito(p, false);
+                                              setModalState((){}); setState((){}); 
+                                              if (carrito.isEmpty && historialRondas.isEmpty) Navigator.pop(context); 
+                                          }
+                                        ),
+                                        SizedBox(width: 30, child: Center(child: Text("$cant", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: textWhite)))),
+                                        _btnCant(
+                                          Icons.add, 
+                                          primaryColor.withOpacity(isClosed ? 0.05 : 0.2), 
+                                          primaryColor.withOpacity(isClosed ? 0.3 : 1.0), 
+                                          isClosed ? () {} : () {
+                                              gestionarCarrito(p, true);
+                                              setModalState((){}); setState((){});
+                                          }
+                                        ),
+                                      ],
+                                    )
                                   ],
+                                ),
+                                // --- CAMPO DE NOTA POR PRODUCTO (MEJORADO VISUALMENTE) ---
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8, left: 76), // Indentado
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      // Fondo amarillo suave para destacar que es una nota
+                                      color: const Color(0xFFFFF9C4).withOpacity(0.1), 
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.white24)
+                                    ),
+                                    child: TextFormField(
+                                      initialValue: notasPorProducto[p.nombre] ?? "",
+                                      onChanged: (val) {
+                                        notasPorProducto[p.nombre] = val;
+                                        _guardarCarrito();
+                                      },
+                                      style: GoogleFonts.poppins(color: Colors.white, fontSize: 13),
+                                      decoration: InputDecoration(
+                                        isDense: true,
+                                        hintText: "✍️ Agregar nota (ej: Sin cebolla)",
+                                        hintStyle: TextStyle(color: Colors.grey[400], fontSize: 12, fontStyle: FontStyle.italic),
+                                        border: InputBorder.none,
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10)
+                                      ),
+                                    ),
+                                  ),
                                 )
                               ],
                             );
@@ -1010,7 +1224,7 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             ),
                           )
                         else
-                          // MODO RESTAURANTE - Botón "Nueva Ronda"
+                          // MODO RESTAURANTE
                           Row(
                             children: [
                               Container(
@@ -1048,7 +1262,8 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     );
   }
 
-  // --- MODAL DE HISTORIAL COMPLETO ---
+  // ... (El resto de métodos auxiliares: _mostrarHistorialCompleto, _buildCarouselItem, etc. se mantienen igual)
+  
   void _mostrarHistorialCompleto(BuildContext context) {
     showDialog(
       context: context,
@@ -1069,7 +1284,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 1. Mostrar Rondas Anteriores
                 for (int i = 0; i < historialRondas.length; i++) ...[
                   Text("Ronda #${i + 1}", style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.bold)),
                   const Divider(color: Colors.white24),
@@ -1085,8 +1299,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                   )),
                   const SizedBox(height: 15),
                 ],
-
-                // 2. Mostrar Ronda Actual (si hay algo)
                 if (carrito.isNotEmpty) ...[
                   Text("Ronda Actual (Sin cerrar)", style: GoogleFonts.poppins(color: accentColor, fontWeight: FontWeight.bold)),
                   const Divider(color: Colors.white24),
@@ -1101,7 +1313,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                     ),
                   )),
                 ],
-                
                 const Divider(color: Colors.white, thickness: 1, height: 30),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1124,8 +1335,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
       ),
     );
   }
-
-  // --- WIDGETS AUXILIARES ---
 
   Widget _buildCarouselItem(Producto p) {
     final int currentQuantity = carrito[p] ?? 0;
@@ -1181,8 +1390,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                         "RD\$${getPrice(p).toStringAsFixed(0)}", 
                         style: GoogleFonts.poppins(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold),
                       ),
-                      
-                      // BOTÓN DEL CARRUSEL (Actualizado con Badge)
                       GestureDetector(
                         onTap: estaCerrado ? null : () => gestionarCarrito(p, true),
                         child: Stack(
@@ -1279,6 +1486,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
+          // --- FIX PARA S-PEN: Desactivar efectos de hover y focus ---
+          hoverColor: Colors.transparent, 
+          focusColor: Colors.transparent,
+          splashColor: primaryColor.withOpacity(0.1), // Personalizar splash
+          highlightColor: primaryColor.withOpacity(0.05),
+          // ------------------------------------------------------------
           onTap: () => _showProductDetails(p),
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1346,17 +1559,14 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                 ),
                             ],
                           ),
-                          
-                          // --- AQUÍ ESTÁ EL CAMBIO SOLICITADO (BOTÓN + BADGE) ---
                           Material( 
                             color: Colors.transparent,
                             child: InkWell(
                               borderRadius: BorderRadius.circular(10),
                               onTap: estaCerrado ? null : () => gestionarCarrito(p, true),
                               child: Stack(
-                                clipBehavior: Clip.none, // Permite que el badge se salga un poco
+                                clipBehavior: Clip.none, 
                                 children: [
-                                  // 1. EL BOTÓN BASE (Siempre muestra el + o el check)
                                   AnimatedContainer( 
                                     duration: const Duration(milliseconds: 300),
                                     padding: const EdgeInsets.all(8),
@@ -1372,8 +1582,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                         color: isJustAdded ? Colors.black : primaryColor.withOpacity(estaCerrado ? 0.3 : 1.0)
                                     ),
                                   ),
-                                  
-                                  // 2. EL BADGE CON EL NÚMERO (Flotando arriba a la derecha)
                                   if (currentQuantity > 0)
                                     Positioned(
                                       top: -6,
@@ -1381,9 +1589,9 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                                       child: Container(
                                         padding: const EdgeInsets.all(5),
                                         decoration: BoxDecoration(
-                                          color: accentColor, // Color Rojo para destacar
+                                          color: accentColor, 
                                           shape: BoxShape.circle,
-                                          border: Border.all(color: cardColor, width: 2) // Borde para separar visualmente
+                                          border: Border.all(color: cardColor, width: 2) 
                                         ),
                                         child: Text(
                                           '$currentQuantity',
@@ -1408,6 +1616,66 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSkeletonChips() {
+    return ListView.builder(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      itemCount: 5,
+      itemBuilder: (_, __) => Container(
+        width: 80,
+        margin: const EdgeInsets.only(right: 10),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+
+  Widget _buildSkeletonList() {
+    return Column(
+      children: [
+        Container(
+          height: 180,
+          margin: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
+          child: Container(decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20))),
+        ),
+        ...List.generate(3, (index) => Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)),
+          child: Row(
+            children: [
+              Container(width: 100, height: 100, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12))),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(width: 120, height: 16, color: Colors.white10),
+                  const SizedBox(height: 8),
+                  Container(width: 180, height: 12, color: Colors.white10),
+                  const SizedBox(height: 20),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    Container(width: 60, height: 16, color: Colors.white10),
+                    Container(width: 30, height: 30, color: Colors.white10),
+                  ])
+                ]),
+              )
+            ],
+          ),
+        ))
+      ],
+    );
+  }
+
+  Widget _btnCant(IconData icon, Color bg, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
+        child: Icon(icon, size: 20, color: color),
       ),
     );
   }
@@ -1512,7 +1780,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                             "Precio:",
                             style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[500]),
                           ),
-                          // Cambiado de Row a Column para que salga abajo
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -1535,7 +1802,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                           ),
                         ],
                       ),
-                      
                       SizedBox(
                         width: 180,
                         child: ElevatedButton.icon(
@@ -1564,68 +1830,6 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           ),
         );
       },
-    );
-  }
-
-  // --- MÉTODOS DE SKELETON (Faltantes) ---
-
-  Widget _buildSkeletonChips() {
-    return ListView.builder(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      itemCount: 5,
-      itemBuilder: (_, __) => Container(
-        width: 80,
-        margin: const EdgeInsets.only(right: 10),
-        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
-      ),
-    );
-  }
-
-  Widget _buildSkeletonList() {
-    return Column(
-      children: [
-        Container(
-          height: 180,
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
-          child: Container(decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20))),
-        ),
-        ...List.generate(3, (index) => Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)),
-          child: Row(
-            children: [
-              Container(width: 100, height: 100, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12))),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Container(width: 120, height: 16, color: Colors.white10),
-                  const SizedBox(height: 8),
-                  Container(width: 180, height: 12, color: Colors.white10),
-                  const SizedBox(height: 20),
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Container(width: 60, height: 16, color: Colors.white10),
-                    Container(width: 30, height: 30, color: Colors.white10),
-                  ])
-                ]),
-              )
-            ],
-          ),
-        ))
-      ],
-    );
-  }
-
-  Widget _btnCant(IconData icon, Color bg, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
-        child: Icon(icon, size: 20, color: color),
-      ),
     );
   }
 }

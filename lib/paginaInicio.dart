@@ -510,7 +510,7 @@ class _MenuHomeScreenState extends State<MenuHomeScreen> with SingleTickerProvid
                   ),
                   const SizedBox(height: 10),
                   _MenuCard(
-                    title: 'Ordenar por Delivery',
+                    title: 'Ordenar por Delivery o Pasar a Recoger',
                     subtitle: !tiendaAbiertaAhora ? '¡Cerrado ahora! 😢' : 'Te lo llevamos a donde estés',
                     icon: Icons.delivery_dining,
                     color: !tiendaAbiertaAhora ? cardColor.withOpacity(0.8) : accentColor,
