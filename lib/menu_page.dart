@@ -366,9 +366,186 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     return total;
   }
 
-  void enviarPedidoWhatsApp() async {
+  // --- LÓGICA DE ENVÍO POR WHATSAPP (MODIFICADA) ---
+  
+  void enviarPedidoWhatsApp() {
     if (estaCerrado) return;
+    
+    // Si es Delivery, pedimos dirección primero
+    if (esDelivery) {
+      _mostrarDialogoDireccion();
+    } else {
+      // Si es Restaurante (mesa), se envía directo sin dirección
+      _generarYEnviarMensaje(null);
+    }
+  }
 
+  void _mostrarDialogoDireccion() {
+    final txtDireccion = TextEditingController();
+    bool usarGPS = false; // false = Manual, true = GPS
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: cardColor,
+            scrollable: true,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: [
+                Icon(Icons.location_on, color: primaryColor),
+                const SizedBox(width: 10),
+                Expanded(child: Text("Datos de Entrega", style: GoogleFonts.poppins(color: textWhite, fontWeight: FontWeight.bold, fontSize: 18))),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "¿Cómo deseas indicarnos tu ubicación?",
+                  style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(height: 20),
+                
+                // --- SELECTOR INTERACTIVO ---
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setDialogState(() => usarGPS = false),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+                          decoration: BoxDecoration(
+                            color: !usarGPS ? primaryColor.withOpacity(0.2) : Colors.black12,
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(
+                              color: !usarGPS ? primaryColor : Colors.white10,
+                              width: 2
+                            )
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(Icons.edit_location_alt, color: !usarGPS ? primaryColor : Colors.white54, size: 28),
+                              const SizedBox(height: 8),
+                              Text("Escribir\nDirección", textAlign: TextAlign.center, style: GoogleFonts.poppins(color: !usarGPS ? Colors.white : Colors.white54, fontSize: 12, fontWeight: FontWeight.bold))
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setDialogState(() => usarGPS = true),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+                          decoration: BoxDecoration(
+                            color: usarGPS ? primaryColor.withOpacity(0.2) : Colors.black12,
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(
+                              color: usarGPS ? primaryColor : Colors.white10,
+                              width: 2
+                            )
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(Icons.share_location, color: usarGPS ? primaryColor : Colors.white54, size: 28),
+                              const SizedBox(height: 8),
+                              Text("Enviar\nUbicación Actual", textAlign: TextAlign.center, style: GoogleFonts.poppins(color: usarGPS ? Colors.white : Colors.white54, fontSize: 12, fontWeight: FontWeight.bold))
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 20),
+
+                // --- CONTENIDO VARIABLE ---
+                if (!usarGPS)
+                  TextField(
+                    controller: txtDireccion,
+                    style: GoogleFonts.poppins(color: Colors.white),
+                    maxLines: 2,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      labelText: "Escribe tu dirección",
+                      hintText: "Calle, #Casa, Sector...",
+                      labelStyle: TextStyle(color: Colors.grey[400]),
+                      hintStyle: TextStyle(color: Colors.grey[600]),
+                      filled: true,
+                      fillColor: Colors.black26,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      prefixIcon: const Icon(Icons.home, color: Colors.grey),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.green.withOpacity(0.3))
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.chat, color: Colors.green), // FIXED: Usamos Icons.chat en vez de Icons.whatsapp
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            "¡Genial! Podrás enviarnos tu 'Ubicación actual' directamente en el chat de WhatsApp.",
+                            style: GoogleFonts.poppins(color: Colors.white, fontSize: 12),
+                          ),
+                        )
+                      ],
+                    ),
+                  )
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text("Cancelar", style: GoogleFonts.poppins(color: Colors.red)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10)
+                ),
+                onPressed: () {
+                  // Validación
+                  if (!usarGPS && txtDireccion.text.trim().isEmpty) {
+                     ScaffoldMessenger.of(context).showSnackBar(
+                       SnackBar(content: Text("Por favor escribe una dirección.", style: GoogleFonts.poppins()))
+                     );
+                     return;
+                  }
+                  
+                  Navigator.pop(ctx); // Cerrar diálogo
+                  
+                  // Preparar texto de dirección
+                  String infoDireccion = usarGPS 
+                      ? "📍 *Ubicación:* Cliente enviará ubicación GPS por el chat."
+                      : "🏠 *Dirección:* ${txtDireccion.text.trim()}";
+                      
+                  _generarYEnviarMensaje(infoDireccion);
+                },
+                child: Text("Continuar al Chat", style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold)),
+              )
+            ],
+          );
+        }
+      ),
+    );
+  }
+
+  void _generarYEnviarMensaje(String? infoDireccion) async {
     String titulo = esDelivery ? "🛵💨 *Pedido Para Delivery*" : "🍽️ *Pedido en Mesa*";
     String mensaje = "$titulo\n\n";
 
@@ -378,6 +555,11 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
     });
 
     mensaje += "\n*Total de Orden: RD\$${totalCarrito.toStringAsFixed(2)}*";
+    
+    // Agregamos la dirección si existe
+    if (infoDireccion != null) {
+      mensaje += "\n\n$infoDireccion";
+    }
 
     final url = Uri.parse(
         "https://wa.me/${widget.telefonoNegocio}?text=${Uri.encodeComponent(mensaje)}");
@@ -390,11 +572,13 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
              // Solo borramos si es delivery completo. En mesa se mantiene hasta cierre manual o timeout.
              if(esDelivery) await _borrarDatosLocales(prefs); 
              
-             Navigator.pop(context);
+             Navigator.pop(context); // Cierra la pantalla de menú
              ScaffoldMessenger.of(context).showSnackBar(
-               SnackBar(content: Text("Pedido Enviado", style: GoogleFonts.poppins()), backgroundColor: Colors.green)
+               SnackBar(content: Text("Abriendo WhatsApp...", style: GoogleFonts.poppins()), backgroundColor: Colors.green)
              );
           }
+        } else {
+           if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No se pudo abrir WhatsApp")));
         }
     } catch (e) {
        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Error al abrir WhatsApp")));
@@ -1219,61 +1403,12 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
                       )
                     ],
                   ),
-                )
+                ),
               ],
             ),
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildSkeletonChips() {
-    return ListView.builder(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      itemCount: 5,
-      itemBuilder: (_, __) => Container(
-        width: 80,
-        margin: const EdgeInsets.only(right: 10),
-        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
-      ),
-    );
-  }
-
-  Widget _buildSkeletonList() {
-    return Column(
-      children: [
-        Container(
-          height: 180,
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
-          child: Container(decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20))),
-        ),
-        ...List.generate(3, (index) => Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)),
-          child: Row(
-            children: [
-              Container(width: 100, height: 100, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12))),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Container(width: 120, height: 16, color: Colors.white10),
-                  const SizedBox(height: 8),
-                  Container(width: 180, height: 12, color: Colors.white10),
-                  const SizedBox(height: 20),
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Container(width: 60, height: 16, color: Colors.white10),
-                    Container(width: 30, height: 30, color: Colors.white10),
-                  ])
-                ]),
-              )
-            ],
-          ),
-        ))
-      ],
     );
   }
 
@@ -1429,6 +1564,57 @@ class _UniversalMenuPageState extends State<UniversalMenuPage> {
           ),
         );
       },
+    );
+  }
+
+  // --- MÉTODOS DE SKELETON (Faltantes) ---
+
+  Widget _buildSkeletonChips() {
+    return ListView.builder(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      itemCount: 5,
+      itemBuilder: (_, __) => Container(
+        width: 80,
+        margin: const EdgeInsets.only(right: 10),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+
+  Widget _buildSkeletonList() {
+    return Column(
+      children: [
+        Container(
+          height: 180,
+          margin: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)),
+          child: Container(decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20))),
+        ),
+        ...List.generate(3, (index) => Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)),
+          child: Row(
+            children: [
+              Container(width: 100, height: 100, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12))),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(width: 120, height: 16, color: Colors.white10),
+                  const SizedBox(height: 8),
+                  Container(width: 180, height: 12, color: Colors.white10),
+                  const SizedBox(height: 20),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    Container(width: 60, height: 16, color: Colors.white10),
+                    Container(width: 30, height: 30, color: Colors.white10),
+                  ])
+                ]),
+              )
+            ],
+          ),
+        ))
+      ],
     );
   }
 
